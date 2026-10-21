@@ -333,6 +333,8 @@ void CharacterEffects::overlayDisc(int x, int y, float outer, float ringWidth,
 }
 
 void CharacterEffects::badge(const AgentBadgeIcon& icon, AgentBadgeRole role, int x, int y, double seconds) {
+  // Let orbiting agent badges travel above the text strip, never disappear into it.
+  if (captionVisible_) y = std::min(y, 408 - kFrameY - kOverlayReach - 1);
   const uint16_t fill = color(17, 20, 27), ring = darken(icon.color, .85);
   if (beginOverlay(x, y)) {
     if (role == AgentBadgeRole::Attention) {
@@ -471,9 +473,11 @@ void CharacterEffects::attention(const CharacterState& state) {
   const AgentBadgesSnapshot badges = badgeSnapshot();
   const double breath = .78 + .17 * std::sin(state.effectSeconds * kPi / 2);
   constexpr uint8_t question[] = {14, 17, 1, 2, 4, 0, 4};
+  // Above the ear/antenna envelope, with room for the ring inside the round display.
+  constexpr int questionX = 280, questionY = -12;
   double ringX = 1, ringY = 0;
   for (int i = 0; i < 32; ++i) {
-    dot(348 + int(std::lround(23 * ringX)), 56 + int(std::lround(23 * ringY)), 1, amber(breath * .3));
+    dot(questionX + int(std::lround(23 * ringX)), questionY + int(std::lround(23 * ringY)), 1, amber(breath * .3));
     const double nextX = ringX * .9807852804032304 - ringY * .19509032201612825;
     ringY = ringX * .19509032201612825 + ringY * .9807852804032304;
     ringX = nextX;
@@ -482,7 +486,7 @@ void CharacterEffects::attention(const CharacterState& state) {
   for (int y = 0; y < 7; ++y)
     for (int x = 0; x < 5; ++x)
       if (question[y] & (1 << (4 - x)))
-        dot(340 + x * 4, 44 + y * 4, 2, rgb);
+        dot(questionX - 8 + x * 4, questionY - 12 + y * 4, 2, rgb);
   if (!showsBadge(badges, AgentBadgeRole::Attention)) dot(35, 70, 2, amber(breath * .45));
   agentBadges(state, badges);
 }

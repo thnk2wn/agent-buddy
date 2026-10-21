@@ -62,7 +62,11 @@ The stock font accepts letters at the parser but lacks 40 glyphs. This branch
 adds them to `CharacterEffects.cpp`, preserving every existing glyph. Arbitrary
 captions need this firmware change (and a rebuilt desktop engine for desktop
 parity), not just the daemon change. Body protection remains unchanged. While captions are visible, moving effects
-leave the text strip clear so letters stay readable.
+leave the text strip clear so letters stay readable. Orbiting agent badges stay
+above that strip instead of disappearing into it. The attention question mark
+is higher and inward to clear Jax ears and Jobot antenna poses. Native checks
+with both custom packs verified the complete glyph across 360 attention frames
+per character; the installed device firmware has not been changed.
 
 The browser preview sends raw native frames over localhost. Its frame rate is
 not a hardware performance benchmark. Completed animation can settle into idle

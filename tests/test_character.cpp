@@ -429,7 +429,7 @@ static void effectRestoration() {
   state.pose.direction = 12;
   assert(effects->render(state, first.data() + 1));
   const auto* bytes = reinterpret_cast<const uint8_t*>(first.data() + 1);
-  const size_t amber = ((44 + kFrameY) * kCharacterFrameWidth + 344 + kCharacterArtX) * 2;
+  const size_t amber = ((-24 + kFrameY) * kCharacterFrameWidth + 276 + kCharacterArtX) * 2;
   assert(bytes[amber] == 0xc4 && bytes[amber + 1] == 0xa8);
   assert(!effects->render(state, first.data() + 1) && effects->error());
   assert(effects->restore(first.data() + 1));
