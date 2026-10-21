@@ -486,7 +486,7 @@ export class CompanionService extends EventEmitter {
     if (!isAgentEnabled(agent, true)) return false;
     const accepted = this.#coordinator.handle(event, namespaceAgentPayload(agent, payload));
     if (accepted) {
-      this.#captions.observe(namespaceAgentPayload(agent, payload));
+      this.#captions.observe(namespaceAgentPayload(agent, payload), event);
       this.syncUsage();
       if (!this.#lastAgentEvents.has(agent))
         void markAgentSeen(agent).catch(error => console.error(`[agents] ${error instanceof Error ? error.message : String(error)}`));

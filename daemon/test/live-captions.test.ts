@@ -49,12 +49,57 @@ test('live pages survive repeated hooks, prioritize attention, and fall back whe
   live.observe({sessionId:'claude:b',cwd:'/repos/other',sessionTitle:'Review migration'});
   await live.refresh(snapshot); assert.equal(live.lines('working',snapshot,1000),null);
   await writeFile(config,JSON.stringify({enabled:true,phrases:{working:'Building'}})); await live.refresh(snapshot);
-  assert.deepEqual(live.lines('working',snapshot,1000),['Building','project']);
+  assert.deepEqual(live.lines('working',snapshot,1000),['Codex Building','project']);
   live.observe({sessionId:'codex:a',cwd:'/repos/project'});
   assert.deepEqual(live.lines('working',snapshot,4000),['Fix the search','pagination']);
-  assert.deepEqual(live.lines('attention',snapshot,4500),['Need your input','other']);
+  assert.deepEqual(live.lines('attention',snapshot,4500),['Claude needs input','other']);
   assert.equal(live.lines('idle',snapshot,4600),null);
-  assert.deepEqual(live.lines('complete',snapshot,4700,['claude']),['All done','other']);
+  assert.deepEqual(live.lines('complete',snapshot,4700,['claude']),['Claude finished','other']);
   await writeFile(config,'broken'); await live.refresh(snapshot);
   assert.equal(live.lines('working',snapshot,5000),null);
+});
+
+
+test('a new Claude prompt immediately takes over from Codex; tool bursts keep its title readable', async t => {
+  const home=await fixture(t); const config=join(home,'task-captions.json');
+  await writeFile(config,JSON.stringify({enabled:true}));
+  const live=new LiveCaptions(config,home,{});
+  const snapshot: PersistedCoordinatorState={version:1,sessions:[session('codex:a'),session('claude:b')]};
+  live.observe({sessionId:'codex:a',cwd:'/repos/first',sessionTitle:'First task'},'userPromptSubmitted');
+  live.observe({sessionId:'claude:b',cwd:'/repos/second',sessionTitle:'Second task'},'preToolUse');
+  await live.refresh(snapshot);
+  assert.deepEqual(live.lines('working',snapshot,1000),['Codex working','first']);
+  live.observe({sessionId:'claude:b'},'userPromptSubmitted');
+  assert.deepEqual(live.lines('working',snapshot,1500),['Claude working','second']);
+  live.observe({sessionId:'codex:a'},'postToolUse');
+  snapshot.sessions[0]!.lastSeenAt=4500;
+  assert.deepEqual(live.lines('working',snapshot,4500),['Second task']);
+  snapshot.sessions[1]!.activeUntil=0;
+  assert.deepEqual(live.lines('working',snapshot,5000),['Codex working','first']);
+});
+
+test('without a prompt, newer agent activity takes over after at most five seconds', async t => {
+  const home=await fixture(t);const config=join(home,'task-captions.json');
+  await writeFile(config,JSON.stringify({enabled:true}));
+  const live=new LiveCaptions(config,home,{});
+  const snapshot: PersistedCoordinatorState={version:1,sessions:[session('codex:a'),session('claude:b')]};
+  await live.refresh(snapshot);
+  assert.equal(live.lines('working',snapshot,1000)?.[0],'Codex working');
+  snapshot.sessions[1]!.lastSeenAt=2000;
+  assert.equal(live.lines('working',snapshot,2000)?.[0],'Codex working');
+  assert.equal(live.lines('working',snapshot,6000)?.[0],'Claude working');
+});
+
+test('playful messages appear only after quiet idle time and yield to real work immediately', async t => {
+  const home=await fixture(t);const config=join(home,'task-captions.json');
+  await writeFile(config,JSON.stringify({enabled:true,idleAfterSeconds:60,idleMessages:['Dreaming in code']}));
+  const live=new LiveCaptions(config,home,{});
+  const snapshot: PersistedCoordinatorState={version:1,sessions:[session('codex:a')]};
+  await live.refresh(snapshot);
+  assert.equal(live.lines('idle',snapshot,1000),null);
+  assert.equal(live.lines('idle',snapshot,60999),null);
+  assert.deepEqual(live.lines('idle',snapshot,61000),['Dreaming in code']);
+  assert.equal(live.lines('idle',snapshot,66000),null);
+  assert.equal(live.lines('working',snapshot,67000)?.[0],'Codex working');
+  assert.equal(live.lines('idle',snapshot,68000),null);
 });

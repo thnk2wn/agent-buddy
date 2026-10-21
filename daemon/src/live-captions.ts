@@ -3,15 +3,15 @@ import {join, basename, sep} from 'node:path';
 import {homedir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {codexHome, claudeHome} from './agents/homes.js';
-import {CaptionPlayback, captionContextFromHook, captionText, type CaptionMode} from './task-captions.js';
-import type {CharacterState, HookPayload} from './protocol.js';
+import {CaptionPlayback, captionContextFromHook, captionText, wrapCaption, type CaptionMode} from './task-captions.js';
+import type {CharacterState, HookPayload, HookEvent} from './protocol.js';
 import type {PersistedCoordinatorState as PersistedState} from './state-coordinator.js';
 
 interface Metadata {project: string; title: string}
 interface Source {payload: HookPayload; explicit: Metadata}
-export interface CaptionSettings {enabled: boolean; mode: CaptionMode; phrases: Partial<Record<CharacterState, string>>}
+export interface CaptionSettings {enabled: boolean; mode: CaptionMode; phrases: Partial<Record<CharacterState, string>>; idleAfterMs: number; idleMessages: string[]}
 const phrases: Record<CharacterState, string> = {
-  working: 'On it', attention: 'Need your input', complete: 'All done', idle: 'Ready', surprise: 'Hello there',
+  working: 'working', attention: 'needs input', complete: 'finished', idle: 'Ready', surprise: 'Hello there',
 };
 
 // Reads bounded metadata only; never interprets prompt/tool text as a task title.
@@ -78,16 +78,20 @@ export async function sessionMetadata(agent: string, id: string, payload: HookPa
 }
 
 export class LiveCaptions {
-  #settings: CaptionSettings = {enabled:false, mode:'pages', phrases:{}};
+  #settings: CaptionSettings = {enabled:false, mode:'pages', phrases:{}, idleAfterMs:60000, idleMessages:[]};
   #sources = new Map<string, Source>();
   #metadata = new Map<string, Metadata>();
   #selected = '';
+  #promptSession = '';
+  #selectedUntil = 0;
+  #idleSince: number | null = null;
   #playback = new CaptionPlayback();
   #refreshing = false;
   constructor(readonly configPath: string, readonly home = homedir(), readonly env = process.env) {}
-  observe(payload: HookPayload): void {
+  observe(payload: HookPayload, event?: HookEvent): void {
     const id = string(payload.sessionId);
     if (!id) return;
+    if (event === 'userPromptSubmitted') this.#promptSession = id;
     // Keep only metadata fields: never retain prompts, commands or tool arguments.
     const previous = this.#sources.get(id);
     const safe: HookPayload = {sessionId:id};
@@ -104,9 +108,11 @@ export class LiveCaptions {
         const value = JSON.parse(await readFile(this.configPath, 'utf8'));
         this.#settings = {enabled:value.enabled === true,
           mode:['pages','ticker'].includes(value.mode) ? value.mode : 'pages',
+          idleAfterMs:Number.isFinite(value.idleAfterSeconds) ? Math.max(15, Math.min(3600,value.idleAfterSeconds))*1000 : 60000,
+          idleMessages:Array.isArray(value.idleMessages) ? value.idleMessages.filter((v:unknown) => typeof v === 'string').slice(0,16).map(captionText).filter(Boolean) : [],
           phrases:Object.fromEntries(Object.entries(value.phrases ?? {}).filter(([key,value]) =>
             key in phrases && typeof value === 'string').map(([key,value]) => [key, captionText(value as string)]))};
-      } catch {this.#settings = {enabled:false,mode:'pages',phrases:{}};}
+      } catch {this.#settings = {enabled:false,mode:'pages',phrases:{},idleAfterMs:60000,idleMessages:[]};}
       const ids = new Set(snapshot.sessions.map(session => session.id));
       for (const id of this.#sources.keys()) if (!ids.has(id)) this.#sources.delete(id);
       for (const id of this.#metadata.keys()) if (!ids.has(id)) this.#metadata.delete(id);
@@ -123,17 +129,33 @@ export class LiveCaptions {
     } finally {this.#refreshing = false;}
   }
   lines(state: CharacterState, snapshot: PersistedState, now = Date.now(), drivers: readonly string[] = []): string[] | null {
-    if (!this.#settings.enabled || !['working','attention','complete'].includes(state)) return null;
+    if (state === 'idle') this.#idleSince ??= now;
+    else this.#idleSince = null;
+    if (!this.#settings.enabled) return null;
+    if (state === 'idle') {
+      const elapsed = now - this.#idleSince! - this.#settings.idleAfterMs;
+      const messages = this.#settings.idleMessages;
+      // Alternate a quiet idle message with the normal token display after a minute.
+      if (elapsed >= 0 && messages.length && elapsed % 10000 < 5000)
+        return wrapCaption(messages[Math.floor(elapsed / 10000) % messages.length]!).slice(0,2);
+      return null;
+    }
+    if (!['working','attention','complete'].includes(state)) return null;
     const eligible = snapshot.sessions.filter(session => state === 'attention' ? session.attentionUntil > now
       : state === 'working' ? session.activeUntil > now || session.subagents.some(agent => agent.leaseUntil > now)
       : drivers.includes(session.id.split(':')[0] ?? '')).sort((a,b) => b.lastSeenAt-a.lastSeenAt);
-    // Tool bursts from another session must not continually reset a multi-page title.
-    const selected = eligible.find(session => session.id === this.#selected) ?? eligible[0];
+    // A new user prompt wins immediately; background tool bursts cannot steal its title.
+    // Without a prompt event (e.g. after restart), follow recent activity in readable chunks.
+    const prompted = eligible.find(session => session.id === this.#promptSession);
+    const held = now < this.#selectedUntil ? eligible.find(session => session.id === this.#selected) : undefined;
+    const selected = prompted ?? held ?? eligible[0];
     if (!selected) return null;
+    if (selected.id !== this.#selected) this.#selectedUntil = now + 5000;
     this.#selected = selected.id;
     const metadata = this.#metadata.get(selected.id) ?? this.#sources.get(selected.id)?.explicit;
     const agent = selected.id.split(':')[0] ?? '';
-    return this.#playback.frame({status:this.#settings.phrases[state] || phrases[state],
+    const name = ({codex:'Codex',claude:'Claude',copilot:'Copilot',grok:'Grok',hermes:'Hermes',openclaw:'OpenClaw'} as Record<string,string>)[agent] || agent;
+    return this.#playback.frame({status:`${name} ${this.#settings.phrases[state] || phrases[state]}`,
       project:metadata?.project || agent, title:metadata?.title || ''}, now, this.#settings.mode).lines;
   }
 }

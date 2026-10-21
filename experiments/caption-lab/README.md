@@ -51,7 +51,9 @@ The live adapter reads explicit hook titles, Codex desktop sidebar `name` metada
 folder. It never substitutes prompts or tool arguments for a missing title. Claude
 sessions without a custom-title record show the project/status only. Reads are
 bounded and refreshed every five seconds. Attention sessions take priority; a
-selected active session stays selected so tool bursts do not restart its title.
+new user prompt selects its session immediately. Background tool bursts do not
+steal that prompt's caption; after a restart without a prompt event, recent activity
+takes over within five seconds. Active captions identify the agent explicitly.
 When idle, the normal usage display returns. Completion captions use the same
 agent that drives the completion animation.
 
@@ -62,12 +64,18 @@ Create `task-captions.json` in the daemon data directory to opt in:
   "enabled": true,
   "mode": "pages",
   "phrases": {
-    "working": "On it",
-    "attention": "Need your input",
-    "complete": "All done"
-  }
+    "working": "working",
+    "attention": "needs input",
+    "complete": "finished"
+  },
+  "idleAfterSeconds": 60,
+  "idleMessages": ["Dreaming in code", "Ready when you are", "All systems cozy"]
 }
 ```
+
+The agent name prefixes active status phrases. Playful `idleMessages` appear only
+after `idleAfterSeconds` (minimum 15 seconds, default 60), alternating with token
+usage every five seconds; any work or attention interrupts them immediately.
 
 `mode` also accepts `ticker`. Edits reload within five seconds. Disable by setting
 `enabled` to false or removing the file. No Settings toggle is implemented yet.
@@ -106,7 +114,7 @@ bash tools/test_character.sh
 bash tools/test_working_bits.sh
 ```
 
-The full daemon suite passes (297 passed, one skipped). A physical Jobot-frame
+The full daemon suite passes (300 passed, one skipped). A physical Jobot-frame
 capture after the code-only flash reported 29.5 fps with no dropped logs.
 
 Coverage includes long titles/identifiers, protocol-safe text, cycle timing,
