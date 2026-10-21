@@ -146,8 +146,12 @@ export class DeviceTransport {
 
   // The lines shown at the bottom of the screen; none hides them.
   setUsage(lines: readonly string[]): void {
-    this.#usage = lines;
-    this.#route();
+    this.#usage = [...lines];
+    // Caption pages change without a character event. Re-routing would resend the current
+    // state too, restarting animations/sound cues on firmware that treats it as an event.
+    if (this.#installing || !this.#enabled) return;
+    if (this.#usb.connected) this.#usb.setUsage(this.#usage);
+    else this.#wifi.setUsage(this.#usage);
   }
 
   async reloadWifi(): Promise<void> {

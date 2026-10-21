@@ -42,15 +42,38 @@ The experiment leaves the installed Agent Buddy working normally.
 
 `daemon/src/task-captions.ts` contains the reusable presentation model and an
 explicit hook-title adapter. `CaptionPlayback` keeps its reading position when
-identical tool events repeat; a changed title/status resets it. The model is
-ready for integration, but the installed daemon is **not wired to it yet**.
+identical tool events repeat; a changed title/status resets it. The device integration is now available in `daemon/src/live-captions.ts` and
+`CompanionService`, opt-in through a local `task-captions.json` configuration.
 
-Hook events do not consistently supply the same title shown in an agent's
-conversation list. The adapter only accepts explicit session/thread title
-fields and a project name or cwd basename. It does not guess from private
-prompts, tool arguments, shell commands, or transcript contents. Next work:
-opt-in local session metadata lookup, session selection when agents run in
-parallel, a Settings toggle, and a tested device firmware build.
+The live adapter reads explicit hook titles, Codex desktop sidebar `name` metadata
+(read-only SQLite, with the CLI session-name index as fallback), and Claude
+`custom-title` records from the matching session transcript under its own projects
+folder. It never substitutes prompts or tool arguments for a missing title. Claude
+sessions without a custom-title record show the project/status only. Reads are
+bounded and refreshed every five seconds. Attention sessions take priority; a
+selected active session stays selected so tool bursts do not restart its title.
+When idle, the normal usage display returns. Completion captions use the same
+agent that drives the completion animation.
+
+Create `task-captions.json` in the daemon data directory to opt in:
+
+```json
+{
+  "enabled": true,
+  "mode": "pages",
+  "phrases": {
+    "working": "On it",
+    "attention": "Need your input",
+    "complete": "All done"
+  }
+}
+```
+
+`mode` also accepts `ticker`. Edits reload within five seconds. Disable by setting
+`enabled` to false or removing the file. No Settings toggle is implemented yet.
+Caption updates send only usage packets, without replaying animation events or
+sound cues. These changes require the accompanying firmware font update; the
+stock desktop WASM renderer has not been rebuilt for arbitrary caption text.
 
 The current packet accepts 2 × 18 characters. Input is capped at 512 characters;
 Latin accents normalize, and unsupported punctuation/symbols become spaces.
@@ -66,7 +89,8 @@ leave the text strip clear so letters stay readable. Orbiting agent badges stay
 above that strip instead of disappearing into it. The attention question mark
 is higher and inward to clear Jax ears and Jobot antenna poses. Native checks
 with both custom packs verified the complete glyph across 360 attention frames
-per character; the installed device firmware has not been changed.
+per character. The experimental device firmware was installed and verified on
+the Waveshare AMOLED 1.75; its firmware ID is `7ecc1b064314d1eb`.
 
 The browser preview sends raw native frames over localhost. Its frame rate is
 not a hardware performance benchmark. Completed animation can settle into idle
@@ -77,14 +101,18 @@ of the daemon's state timers.
 
 ```sh
 npm run build --prefix daemon
-node --test daemon/dist/test/task-captions.test.js
+npm test --prefix daemon
 bash tools/test_character.sh
 bash tools/test_working_bits.sh
 ```
+
+The full daemon suite passes (297 passed, one skipped). A physical Jobot-frame
+capture after the code-only flash reported 29.5 fps with no dropped logs.
 
 Coverage includes long titles/identifiers, protocol-safe text, cycle timing,
 repeated-event stability, explicit title fields, native alphabet rendering,
 restoration, allocation guards, and the existing character/effect checks.
 The lab was also exercised in a browser with both characters, title paging,
-manual navigation, and alternate presentation modes. No hardware flash was
-performed. No character pack files are committed here.
+manual navigation, and alternate presentation modes. The code-only hardware flash preserves the existing character partition. No
+character pack files are committed here. Local runtime patches may be replaced
+by a future stock app update; re-test compatibility before reapplying them.
