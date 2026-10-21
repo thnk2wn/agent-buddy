@@ -319,6 +319,45 @@ void usageLinesAtBottom() {
   std::cout << "Usage lines: centered at the bottom, label and value colors, cleared by an empty packet\n";
 }
 
+void completeCaptionAlphabet() {
+  AgentBadges badges;
+  CharacterEffects effects(first.data() + 1, second.data() + 1, &badges);
+  const CharacterState idle{{0, 0, 0}, CharacterMode::Idle, CharacterMode::Idle, 1, 0};
+  const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,.:";
+  for (const char* letter = alphabet; *letter; ++letter) {
+    first.fill(0);
+    const char text[] = {*letter, 0};
+    assert(badges.setUsagePacket(text));
+    auto* frame = first.data() + 1;
+    assert(effects.render(idle, frame));
+    assert(std::any_of(frame + 410 * kCharacterFrameWidth, frame + kPixels,
+                       [](uint16_t value) { return value != 0; }));
+    assert(effects.restore(frame));
+    assert(std::all_of(frame, frame + kPixels, [](uint16_t value) { return value == 0; }));
+  }
+  std::cout << "Caption alphabet: all 65 non-space protocol characters render and restore\n";
+}
+
+void captionsStayClearOfAnimation() {
+  AgentBadges badges;
+  assert(badges.setUsagePacket("Design standup|preview workflow"));
+  first.fill(0);
+  second.fill(0);
+  CharacterEffects effects(first.data() + 1, second.data() + 1, &badges);
+  const CharacterState idle{{0, 0, 0}, CharacterMode::Idle, CharacterMode::Idle, 1, 0};
+  auto* frame = first.data() + 1;
+  assert(effects.render(idle, frame));
+  std::vector<uint16_t> expected(frame + 408 * kCharacterFrameWidth,
+                                 frame + 443 * kCharacterFrameWidth);
+  for (int tick = 0; tick < 360; ++tick) {
+    assert(effects.restore(frame));
+    assert(effects.render(working(tick / 30.f, 9, tick % 24), frame));
+    assert(std::equal(expected.begin(), expected.end(), frame + 408 * kCharacterFrameWidth));
+  }
+  assert(effects.restore(frame));
+  std::cout << "Caption strip stays unchanged through a full working-effect cycle\n";
+}
+
 int main(int argc, char**) {
   if (argc > 1) { otherModes(true); return 0; }
   otherModes(false);
@@ -328,6 +367,8 @@ int main(int argc, char**) {
   sleepingZsAlternateSides();
   protectionRestorationAndBudget();
   usageLinesAtBottom();
+  completeCaptionAlphabet();
+  captionsStayClearOfAnimation();
   std::cout << "Character effects: working bits and alternating sleeping Zs; opposing motion, "
                "wrap/pose continuity, body protection, restoration, canaries and allocation guard passed\n";
 }
