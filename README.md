@@ -31,8 +31,44 @@ desktop, with or without the device.
   <img src="preview/agent-companion-demo.gif" alt="The Copilot character cycling through Idle, Surprise, Working, Needs attention, and Complete states" width="360">
 </p>
 
+## What this fork adds
+
+This personal fork builds on [Dan Wahlin’s Agent Buddy](https://github.com/DanWahlin/agent-buddy)
+with an **opt-in device caption experiment**. Upstream release downloads linked
+below do not include these changes.
+
+- **Readable task context:** agent/status and project captions, followed by long
+  conversation titles across word-wrapped pages. An optional slow ticker is also
+  available. Missing titles fall back to the project/status.
+- **Local title lookup:** Codex sidebar names and Claude custom session titles,
+  read locally without sending them to a cloud service or substituting prompts
+  or tool arguments for titles.
+- **Agent handoff:** a new user prompt selects that agent’s task; pending input
+  takes priority. Background tool activity does not continually restart the title.
+- **Idle personality:** customizable playful captions appear only after a quiet
+  idle period (60 seconds by default). Active captions identify the agent and status.
+- **Firmware readability:** a complete Latin alphabet in the existing font, a
+  clear caption area, agent badges kept above it, and an attention indicator
+  repositioned to avoid the custom characters’ ears and antenna. Caption paging
+  does not replay animation or sound events.
+- **Native preview lab:** a local browser preview uses the actual C++ renderer
+  to compare paging, ticker, character poses, badges, and existing sound cues.
+
+**Status:** experimental, tested on a Waveshare AMOLED 1.75. Device captions
+require both this fork’s daemon and firmware; stock desktop builds do not have
+matching caption rendering. Configuration is through `task-captions.json`, with
+no Settings toggle yet. Custom Jobot/Jax character packs are supplied separately
+and are not included in this repository. A stock app update can replace a locally
+patched daemon.
+
+See the [caption experiment guide](experiments/caption-lab/README.md) for the
+configuration, preview instructions, validation, and limitations. Captions are
+off by default; remove the configuration or set `enabled` to `false` to return
+to the normal usage display.
+
 ## Contents
 
+- [What this fork adds](#what-this-fork-adds)
 - [Features](#features)
 - [How it works](#how-it-works)
 - [What you need](#what-you-need)
