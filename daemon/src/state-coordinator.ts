@@ -56,6 +56,7 @@ export class StateCoordinator {
   readonly #retainedSessionMs: number;
   #state: CharacterState = 'idle';
   #drivingAgents = new Set<AgentId>();
+  #drivingSessionIds: string[] = [];
   #completeTimer: NodeJS.Timeout | undefined;
   #sweepTimer: NodeJS.Timeout | undefined;
 
@@ -84,6 +85,10 @@ export class StateCoordinator {
 
   get drivingAgents(): AgentId[] {
     return [...this.#drivingAgents];
+  }
+
+  get drivingSessionIds(): string[] {
+    return [...this.#drivingSessionIds];
   }
 
   agentBadgeRoles(): {
@@ -416,6 +421,7 @@ export class StateCoordinator {
     }
     if (!this.#completeTimer) {
       this.#drivingAgents.clear();
+      this.#drivingSessionIds = [];
       this.#setState('idle');
     }
   }
@@ -444,6 +450,7 @@ export class StateCoordinator {
 
   #setDrivers(sessions: SessionState[]): void {
     this.#drivingAgents = new Set(this.#orderedAgents(sessions));
+    this.#drivingSessionIds = sessions.map(session => session.id);
   }
 
   #orderedAgents(sessions: SessionState[]): AgentId[] {

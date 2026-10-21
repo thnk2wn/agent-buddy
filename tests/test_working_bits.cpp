@@ -69,14 +69,15 @@ uint64_t checksum(const uint16_t* frame) {
 }
 
 void otherModes(bool print) {
+  // Attention snapshots use the upper question-mark position, clear of tall ears.
   constexpr uint64_t expected[] = {
     10789368490682096421ull, 10789368490682096421ull, 10789368490682096421ull,
     10789368490682096421ull, 10789368490682096421ull, 10165471195723006773ull,
     2875214265913098837ull, 10789368490682096421ull, 10789368490682096421ull,
     10789368490682096421ull, 10789368490682096421ull, 3143469265638171115ull,
     9483303231247693677ull, 2634939458136737533ull, 10789368490682096421ull,
-    14108009930531596155ull, 14367857870770044755ull, 1713394645811753611ull,
-    14367857870770044755ull, 14108009930531596155ull,
+    15232456725722990126ull, 9285564074587866511ull, 2572920905279624375ull,
+    9285564074587866511ull, 15232456725722990126ull,
   };
   first.fill(0);
   second.fill(0);
@@ -319,6 +320,70 @@ void usageLinesAtBottom() {
   std::cout << "Usage lines: centered at the bottom, label and value colors, cleared by an empty packet\n";
 }
 
+void completeCaptionAlphabet() {
+  AgentBadges badges;
+  CharacterEffects effects(first.data() + 1, second.data() + 1, &badges);
+  const CharacterState idle{{0, 0, 0}, CharacterMode::Idle, CharacterMode::Idle, 1, 0};
+  const char* alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789,.:";
+  for (const char* letter = alphabet; *letter; ++letter) {
+    first.fill(0);
+    const char text[] = {*letter, 0};
+    assert(badges.setUsagePacket(text));
+    auto* frame = first.data() + 1;
+    assert(effects.render(idle, frame));
+    assert(std::any_of(frame + 410 * kCharacterFrameWidth, frame + kPixels,
+                       [](uint16_t value) { return value != 0; }));
+    assert(effects.restore(frame));
+    assert(std::all_of(frame, frame + kPixels, [](uint16_t value) { return value == 0; }));
+  }
+  std::cout << "Caption alphabet: all 65 non-space protocol characters render and restore\n";
+}
+
+void captionsStayClearOfAnimation() {
+  AgentBadges badges;
+  assert(badges.setUsagePacket("Design standup|preview workflow"));
+  first.fill(0);
+  second.fill(0);
+  CharacterEffects effects(first.data() + 1, second.data() + 1, &badges);
+  const CharacterState idle{{0, 0, 0}, CharacterMode::Idle, CharacterMode::Idle, 1, 0};
+  auto* frame = first.data() + 1;
+  assert(effects.render(idle, frame));
+  std::vector<uint16_t> expected(frame + 408 * kCharacterFrameWidth,
+                                 frame + 443 * kCharacterFrameWidth);
+  for (int tick = 0; tick < 360; ++tick) {
+    assert(effects.restore(frame));
+    assert(effects.render(working(tick / 30.f, 9, tick % 24), frame));
+    assert(std::equal(expected.begin(), expected.end(), frame + 408 * kCharacterFrameWidth));
+  }
+  assert(effects.restore(frame));
+  std::cout << "Caption strip stays unchanged through a full working-effect cycle\n";
+}
+
+void agentBadgeClearsCaptionStrip() {
+  AgentBadges badges;
+  assert(badges.setIconPacket("codex:5EE0A0:AAAAAAAAAAAAAAAAAAAADAAAHgAAD4AAB8AAA+AAAfAAAPgAAHgAAPAAA+AAB8AAD4QQHw/4DA/4AAfwAAAAAAAAAAAAAAAA"));
+  assert(badges.setActivePacket("codex=w"));
+  assert(badges.setUsagePacket("Design standup|preview workflow"));
+  const auto icon = badges.snapshot().icons[0];
+  size_t expected = 0;
+  for (unsigned bits : icon.mask)
+    for (; bits; bits >>= 1) expected += bits & 1;
+  first.fill(0);
+  second.fill(0);
+  std::vector<uint16_t> overlay(CharacterEffects::kOverlayScratchPixels);
+  CharacterEffects effects(first.data() + 1, second.data() + 1, &badges, overlay.data());
+  auto* frame = first.data() + 1;
+  for (int tick = 0; tick < 360; ++tick) {
+    assert(effects.restore(frame));
+    assert(effects.render(working(tick / 30.f, 9, tick % 24), frame));
+    assert(static_cast<size_t>(std::count(frame, frame + kPixels, icon.color)) >= expected);
+    assert(std::none_of(frame + 408 * kCharacterFrameWidth, frame + 443 * kCharacterFrameWidth,
+                        [&](uint16_t value) { return value == icon.color; }));
+  }
+  assert(effects.restore(frame));
+  std::cout << "Agent badge remains fully visible above captions throughout its orbit\n";
+}
+
 int main(int argc, char**) {
   if (argc > 1) { otherModes(true); return 0; }
   otherModes(false);
@@ -328,6 +393,9 @@ int main(int argc, char**) {
   sleepingZsAlternateSides();
   protectionRestorationAndBudget();
   usageLinesAtBottom();
+  completeCaptionAlphabet();
+  captionsStayClearOfAnimation();
+  agentBadgeClearsCaptionStrip();
   std::cout << "Character effects: working bits and alternating sleeping Zs; opposing motion, "
                "wrap/pose continuity, body protection, restoration, canaries and allocation guard passed\n";
 }

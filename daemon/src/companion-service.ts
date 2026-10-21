@@ -1,3 +1,4 @@
+import {LiveCaptions} from './live-captions.js';
 import {existsSync, readFileSync} from 'node:fs';
 import {mkdir, rename, writeFile} from 'node:fs/promises';
 import {EventEmitter} from 'node:events';
@@ -261,6 +262,9 @@ export class CompanionService extends EventEmitter {
   #usageTotals: UsageTotals = {aic: null, tokens: null};
   #usageTimer: NodeJS.Timeout | null = null;
   #usageSoon: NodeJS.Timeout | null = null;
+  #captionTimer: NodeJS.Timeout | null = null;
+  #captionRefreshAt = 0;
+  readonly #captions: LiveCaptions;
   readonly #firmwareImage: () => FirmwareImage | null;
   #firmwareUpdating: FirmwareStatus['updating'] = null;
   #lastFirmware: FirmwareStatus['last'] = null;
@@ -300,6 +304,7 @@ export class CompanionService extends EventEmitter {
     this.#transport = transport;
     this.#coordinator = coordinator;
     this.#agentContext = agentContext;
+    this.#captions = new LiveCaptions(join(agentContext.dataDir, 'task-captions.json'), agentContext.home, agentContext.env);
     this.#badgeIcons = badgeIcons;
     this.#characterBuilder = characterBuilder;
     this.#desktopApp = desktopApp;
@@ -327,9 +332,21 @@ export class CompanionService extends EventEmitter {
     this.#usageTimer = setInterval(() => void this.refreshUsage(), USAGE_REFRESH_MS);
     this.#usageTimer.unref();
     void this.refreshUsage();
+    const tick = () => {
+      this.syncUsage();
+      if (Date.now() - this.#captionRefreshAt >= 5000) {
+        this.#captionRefreshAt = Date.now();
+        void this.#captions.refresh(this.#coordinator.snapshot()).then(() => this.syncUsage());
+      }
+    };
+    this.#captionTimer = setInterval(tick, 500);
+    this.#captionTimer.unref();
+    tick();
   }
 
   stopUsage(): void {
+    if (this.#captionTimer) clearInterval(this.#captionTimer);
+    this.#captionTimer = null;
     if (this.#usageTimer) clearInterval(this.#usageTimer);
     if (this.#usageSoon) clearTimeout(this.#usageSoon);
     this.#usageTimer = this.#usageSoon = null;
@@ -361,6 +378,8 @@ export class CompanionService extends EventEmitter {
   }
 
   #deviceUsageLines(): string[] {
+    const caption = this.#captions.lines(this.#coordinator.state, this.#coordinator.snapshot(), Date.now(), this.#coordinator.drivingSessionIds);
+    if (caption) return caption;
     if (!this.#display.showUsage) return [];
     const agents = [...this.#coordinator.agentActivity().keys()];
     return deviceUsageLines(this.#usageTotals, {
@@ -467,6 +486,8 @@ export class CompanionService extends EventEmitter {
     if (!isAgentEnabled(agent, true)) return false;
     const accepted = this.#coordinator.handle(event, namespaceAgentPayload(agent, payload));
     if (accepted) {
+      this.#captions.observe(namespaceAgentPayload(agent, payload), event);
+      this.syncUsage();
       if (!this.#lastAgentEvents.has(agent))
         void markAgentSeen(agent).catch(error => console.error(`[agents] ${error instanceof Error ? error.message : String(error)}`));
       this.#lastAgentEvents.set(agent, Date.now());

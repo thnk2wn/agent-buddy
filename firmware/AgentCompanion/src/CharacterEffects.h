@@ -59,6 +59,8 @@ class CharacterEffects {
   uint16_t* overlay_ = nullptr;
   OverlayRegion regions_[2][kOverlayBadges] = {};
   uint8_t regionCounts_[2] = {};
+  bool captionVisible_ = false;
+  bool drawingCaption_ = false;
   int active_ = 0;
   const char* error_ = nullptr;
 };
