@@ -50,12 +50,17 @@ The live adapter reads explicit hook titles, Codex desktop sidebar `name` metada
 `custom-title` records from the matching session transcript under its own projects
 folder. It never substitutes prompts or tool arguments for a missing title. Claude
 sessions without a custom-title record show the project/status only. Reads are
-bounded and refreshed every five seconds. Attention sessions take priority; a
+bounded and refreshed every five seconds. Claude metadata is indexed incrementally
+from the beginning of the transcript, up to 2 MiB per session per refresh, with
+a 64 KiB record limit. Known titles survive growth; on a large resumed transcript,
+a later title or rename can take several refreshes to reach. No transcript
+content is persisted. Attention sessions take priority; a
 new user prompt selects its session immediately. Background tool bursts do not
 steal that prompt's caption; after a restart without a prompt event, recent activity
 takes over within five seconds. Active captions identify the agent explicitly.
-When idle, the normal usage display returns. Completion captions use the same
-agent that drives the completion animation.
+When idle, the normal usage display returns. Completion captions use the exact
+session that drives the completion animation, including when multiple sessions
+belong to the same agent.
 
 Create `task-captions.json` in the daemon data directory to opt in:
 
@@ -114,7 +119,7 @@ bash tools/test_character.sh
 bash tools/test_working_bits.sh
 ```
 
-The full daemon suite passes (300 passed, one skipped). A physical Jobot-frame
+The full daemon suite passes (306 passed, one skipped). A physical Jobot-frame
 capture after the code-only flash reported 29.5 fps with no dropped logs.
 
 Coverage includes long titles/identifiers, protocol-safe text, cycle timing,

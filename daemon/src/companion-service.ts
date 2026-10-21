@@ -378,7 +378,7 @@ export class CompanionService extends EventEmitter {
   }
 
   #deviceUsageLines(): string[] {
-    const caption = this.#captions.lines(this.#coordinator.state, this.#coordinator.snapshot(), Date.now(), this.#coordinator.drivingAgents);
+    const caption = this.#captions.lines(this.#coordinator.state, this.#coordinator.snapshot(), Date.now(), this.#coordinator.drivingSessionIds);
     if (caption) return caption;
     if (!this.#display.showUsage) return [];
     const agents = [...this.#coordinator.agentActivity().keys()];

@@ -54,7 +54,7 @@ test('live pages survive repeated hooks, prioritize attention, and fall back whe
   assert.deepEqual(live.lines('working',snapshot,4000),['Fix the search','pagination']);
   assert.deepEqual(live.lines('attention',snapshot,4500),['Claude needs input','other']);
   assert.equal(live.lines('idle',snapshot,4600),null);
-  assert.deepEqual(live.lines('complete',snapshot,4700,['claude']),['Claude finished','other']);
+  assert.deepEqual(live.lines('complete',snapshot,4700,['claude:b']),['Claude finished','other']);
   await writeFile(config,'broken'); await live.refresh(snapshot);
   assert.equal(live.lines('working',snapshot,5000),null);
 });
@@ -102,4 +102,42 @@ test('playful messages appear only after quiet idle time and yield to real work 
   assert.equal(live.lines('idle',snapshot,66000),null);
   assert.equal(live.lines('working',snapshot,67000)?.[0],'Codex working');
   assert.equal(live.lines('idle',snapshot,68000),null);
+});
+
+test('a new hook arriving during configuration I/O survives pruning and subsequent refreshes', async t => {
+  const home=await fixture(t);const config=join(home,'task-captions.json');
+  await writeFile(config,JSON.stringify({enabled:true}));
+  const live=new LiveCaptions(config,home,{});
+  const refreshing=live.refresh({version:1,sessions:[]});
+  live.observe({sessionId:'codex:new',cwd:'/repo/project',sessionTitle:'New task'},'userPromptSubmitted');
+  await refreshing;
+  const snapshot: PersistedCoordinatorState={version:1,sessions:[session('codex:new')]};
+  await live.refresh(snapshot);
+  assert.deepEqual(live.lines('working',snapshot,1000),['Codex working','project']);
+  assert.deepEqual(live.lines('working',snapshot,4000),['New task']);
+});
+
+test('completion uses the actual completed session even when the last prompt belongs to an older session', async t => {
+  const {StateCoordinator}=await import('../src/state-coordinator.js');
+  const home=await fixture(t);const config=join(home,'task-captions.json');
+  await writeFile(config,JSON.stringify({enabled:true}));
+  const live=new LiveCaptions(config,home,{});let now=1000;
+  const coordinator=new StateCoordinator(()=>{}, {now:()=>now,sweepMs:0});
+  t.after(()=>coordinator.close());
+  const event=(name: import('../src/protocol.js').HookEvent,id:string,extra={})=>{
+    const payload={sessionId:id,...extra};coordinator.handle(name,payload);live.observe(payload,name);
+  };
+  event('userPromptSubmitted','codex:a',{cwd:'/repo/old-task',sessionTitle:'Old task'});
+  event('preToolUse','codex:a');event('agentStop','codex:a');
+  await live.refresh(coordinator.snapshot());
+  assert.deepEqual(coordinator.drivingSessionIds,['codex:a']);
+  live.lines(coordinator.state,coordinator.snapshot(),now,coordinator.drivingSessionIds);
+  now=2000;event('preToolUse','codex:b',{cwd:'/repo/new-task',sessionTitle:'Actual latest task'});
+  await live.refresh(coordinator.snapshot());
+  assert.deepEqual(live.lines(coordinator.state,coordinator.snapshot(),now,coordinator.drivingSessionIds),['Codex working','new task']);
+  now=3000;event('agentStop','codex:b');
+  assert.equal(coordinator.state,'complete');
+  assert.deepEqual(coordinator.drivingSessionIds,['codex:b']);
+  assert.deepEqual(live.lines(coordinator.state,coordinator.snapshot(),now,coordinator.drivingSessionIds),['Codex finished','new task']);
+  assert.deepEqual(live.lines(coordinator.state,coordinator.snapshot(),now+3000,coordinator.drivingSessionIds),['Actual latest task']);
 });

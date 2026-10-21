@@ -2,6 +2,7 @@ import {readFile, open, readdir, realpath} from 'node:fs/promises';
 import {join, basename, sep} from 'node:path';
 import {homedir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
+import {TranscriptTitles} from './transcript-titles.js';
 import {codexHome, claudeHome} from './agents/homes.js';
 import {CaptionPlayback, captionContextFromHook, captionText, wrapCaption, type CaptionMode} from './task-captions.js';
 import type {CharacterState, HookPayload, HookEvent} from './protocol.js';
@@ -35,7 +36,7 @@ function records(text: string): Record<string, unknown>[] {
 function string(value: unknown): string {return typeof value === 'string' ? value : '';}
 
 export async function sessionMetadata(agent: string, id: string, payload: HookPayload,
-    home = homedir(), env: NodeJS.ProcessEnv = process.env): Promise<Metadata> {
+    home = homedir(), env: NodeJS.ProcessEnv = process.env, transcriptTitles = new TranscriptTitles()): Promise<Metadata> {
   const result = captionContextFromHook(payload);
   if (!/^[a-zA-Z0-9_-]{1,128}$/.test(id)) return result;
   if (agent === 'codex') {
@@ -69,9 +70,7 @@ export async function sessionMetadata(agent: string, id: string, payload: HookPa
     // Only this session's transcript under Claude's own projects directory is eligible.
     const [resolved, base] = await Promise.all([realpath(candidate).catch(() => ''), realpath(root).catch(() => '')]);
     if (resolved && base && resolved.startsWith(base + sep) && basename(resolved) === `${id}.jsonl`) {
-      for (const row of records(await tail(resolved).catch(() => '')))
-        if (row.type === 'custom-title' && row.sessionId === id && typeof row.customTitle === 'string')
-          result.title = captionText(row.customTitle);
+      result.title ||= await transcriptTitles.read(resolved, id);
     }
   }
   return result;
@@ -87,6 +86,7 @@ export class LiveCaptions {
   #idleSince: number | null = null;
   #playback = new CaptionPlayback();
   #refreshing = false;
+  #transcriptTitles = new TranscriptTitles();
   constructor(readonly configPath: string, readonly home = homedir(), readonly env = process.env) {}
   observe(payload: HookPayload, event?: HookEvent): void {
     const id = string(payload.sessionId);
@@ -103,6 +103,10 @@ export class LiveCaptions {
   async refresh(snapshot: PersistedState): Promise<void> {
     if (this.#refreshing) return;
     this.#refreshing = true;
+    // Prune before yielding: a first hook arriving during I/O must survive this refresh.
+    const ids = new Set(snapshot.sessions.map(session => session.id));
+    for (const id of this.#sources.keys()) if (!ids.has(id)) this.#sources.delete(id);
+    for (const id of this.#metadata.keys()) if (!ids.has(id)) this.#metadata.delete(id);
     try {
       try {
         const value = JSON.parse(await readFile(this.configPath, 'utf8'));
@@ -113,9 +117,6 @@ export class LiveCaptions {
           phrases:Object.fromEntries(Object.entries(value.phrases ?? {}).filter(([key,value]) =>
             key in phrases && typeof value === 'string').map(([key,value]) => [key, captionText(value as string)]))};
       } catch {this.#settings = {enabled:false,mode:'pages',phrases:{},idleAfterMs:60000,idleMessages:[]};}
-      const ids = new Set(snapshot.sessions.map(session => session.id));
-      for (const id of this.#sources.keys()) if (!ids.has(id)) this.#sources.delete(id);
-      for (const id of this.#metadata.keys()) if (!ids.has(id)) this.#metadata.delete(id);
       if (!this.#settings.enabled) return;
       // Bound metadata reads; attention and most recently active sessions take priority.
       const sessions = [...snapshot.sessions].sort((a,b) => b.attentionUntil-a.attentionUntil || b.lastSeenAt-a.lastSeenAt).slice(0,16);
@@ -123,12 +124,15 @@ export class LiveCaptions {
         const colon = session.id.indexOf(':');
         if (colon < 0) continue;
         const source = this.#sources.get(session.id);
-        this.#metadata.set(session.id, await sessionMetadata(session.id.slice(0,colon), session.id.slice(colon+1),
-          source?.payload ?? {}, this.home, this.env).catch(() => source?.explicit ?? {project:'',title:''}));
+        const metadata = await sessionMetadata(session.id.slice(0,colon), session.id.slice(colon+1),
+          source?.payload ?? {}, this.home, this.env, this.#transcriptTitles)
+          .catch(() => this.#metadata.get(session.id) ?? source?.explicit ?? {project:'',title:''});
+        // Do not publish a read made before a newer hook changed this session's metadata.
+        if (this.#sources.get(session.id) === source) this.#metadata.set(session.id, metadata);
       }
     } finally {this.#refreshing = false;}
   }
-  lines(state: CharacterState, snapshot: PersistedState, now = Date.now(), drivers: readonly string[] = []): string[] | null {
+  lines(state: CharacterState, snapshot: PersistedState, now = Date.now(), drivingSessionIds: readonly string[] = []): string[] | null {
     if (state === 'idle') this.#idleSince ??= now;
     else this.#idleSince = null;
     if (!this.#settings.enabled) return null;
@@ -143,7 +147,7 @@ export class LiveCaptions {
     if (!['working','attention','complete'].includes(state)) return null;
     const eligible = snapshot.sessions.filter(session => state === 'attention' ? session.attentionUntil > now
       : state === 'working' ? session.activeUntil > now || session.subagents.some(agent => agent.leaseUntil > now)
-      : drivers.includes(session.id.split(':')[0] ?? '')).sort((a,b) => b.lastSeenAt-a.lastSeenAt);
+      : drivingSessionIds.includes(session.id)).sort((a,b) => b.lastSeenAt-a.lastSeenAt);
     // A new user prompt wins immediately; background tool bursts cannot steal its title.
     // Without a prompt event (e.g. after restart), follow recent activity in readable chunks.
     const prompted = eligible.find(session => session.id === this.#promptSession);
@@ -152,7 +156,9 @@ export class LiveCaptions {
     if (!selected) return null;
     if (selected.id !== this.#selected) this.#selectedUntil = now + 5000;
     this.#selected = selected.id;
-    const metadata = this.#metadata.get(selected.id) ?? this.#sources.get(selected.id)?.explicit;
+    const explicit = this.#sources.get(selected.id)?.explicit;
+    const stored = this.#metadata.get(selected.id);
+    const metadata = {project:explicit?.project || stored?.project || '', title:explicit?.title || stored?.title || ''};
     const agent = selected.id.split(':')[0] ?? '';
     const name = ({codex:'Codex',claude:'Claude',copilot:'Copilot',grok:'Grok',hermes:'Hermes',openclaw:'OpenClaw'} as Record<string,string>)[agent] || agent;
     return this.#playback.frame({status:`${name} ${this.#settings.phrases[state] || phrases[state]}`,
