@@ -1,3 +1,6 @@
+import {SessionInputTracker} from './session-input.js';
+import {compactPacket, type CompactCaption} from './compact-caption.js';
+import type {FocusAction} from './session-focus.js';
 import {request as httpRequest} from 'node:http';
 import {
   isOrientationOffset, isOrientationTenths, orientationFromTenths, orientationProtocol,
@@ -56,6 +59,7 @@ export class WifiTransport {
   #iconSignature = '';
   #activeSignature = '';
   #usageSignature: string | null = null;
+  #compactSignature: string | null = null;
   #scanTimer: NodeJS.Timeout | undefined;
   #scanActive = false;
   #commands = Promise.resolve();
@@ -67,13 +71,17 @@ export class WifiTransport {
   #ssidBase64: string | undefined;
   #installing = false;
   #buttons: ButtonCount | null = null;
+  readonly #sessionInputs=new SessionInputTracker();
+  #focusCounts: {boot:number; pin:number; next:number} | null = null;
+  readonly #focus: (action: FocusAction) => void;
   readonly #changed: () => void;
   readonly #button: (presses: number) => void;
 
   // `button` runs when the device's BOOT button count goes up, with the count since the device started.
-  constructor(changed: () => void = () => undefined, button: (presses: number) => void = () => undefined) {
+  constructor(changed: () => void = () => undefined, button: (presses: number) => void = () => undefined, focus: (action: FocusAction) => void = () => undefined) {
     this.#changed = changed;
     this.#button = button;
+    this.#focus = focus;
   }
 
   get connected(): boolean {
@@ -196,7 +204,7 @@ export class WifiTransport {
       if (!response.ok) return false;
       const status = await response.json() as {deviceId?: string; boot?: number; character?: string; protocol?: number;
                                                patchRam?: string; ssidBase64?: string; firmware?: string;
-                                               buttonPresses?: number; orientationOffsetTenths?: unknown;
+                                               sessionInputs?:unknown; buttonPresses?: number; focusPinPresses?: number; focusNextPresses?: number; orientationOffsetTenths?: unknown;
                                                board?: unknown};
       if (status.deviceId?.toLowerCase() !== this.#config.deviceId.toLowerCase()) return false;
       if (!Number.isInteger(status.boot) || Number(status.boot) < 0) return false;
@@ -225,6 +233,13 @@ export class WifiTransport {
         this.#buttons = buttons;
         if (pressed) this.#button(buttons.presses);
       }
+      if ([status.focusPinPresses,status.focusNextPresses].every(v=>Number.isInteger(v) && Number(v)>=0 && Number(v)<=0xFFFFFFFF)) {
+        const counts={boot:status.boot!,pin:status.focusPinPresses!,next:status.focusNextPresses!};
+        if(this.#focusCounts?.boot===counts.boot) for(const action of ['pin','next'] as const)
+          for(let i=0;i<Math.min(8,Math.max(0,counts[action]-this.#focusCounts[action]));i++) this.#focus(action);
+        this.#focusCounts=counts;
+      }
+      for(const action of this.#sessionInputs.read(status.boot!,status.sessionInputs,needsSync))this.#focus(action);
       this.#endpoint = endpoint;
       this.#boot = status.boot!;
       this.#protocol = protocol;
@@ -232,6 +247,7 @@ export class WifiTransport {
         this.#iconSignature = '';
         this.#activeSignature = '';
         this.#usageSignature = null;
+      this.#compactSignature = null;
       }
       if (this.#enabled && needsSync) await this.#sendState(this.#desired);
       else this.#setConnection(true, endpoint);
@@ -408,7 +424,16 @@ export class WifiTransport {
       });
   }
 
-  async #postBadge(path: '/icon' | '/agents' | '/usage' | '/orientation', body: string): Promise<Response> {
+  setCompact(caption:CompactCaption|null):void {
+    const packet=compactPacket(caption,this.#protocol);
+    if(this.#installing || !this.#enabled || !this.#config || !this.#endpoint || this.#protocol<13 || packet===this.#compactSignature)return;
+    this.#commands=this.#commands.then(async()=>{
+      if(!this.#enabled || !this.#config || !this.#endpoint || this.#protocol<13 || packet===this.#compactSignature)return;
+      await this.#postBadge('/switcher',packet);this.#compactSignature=packet;
+    }).catch(error=>{console.error(`[wifi] ${this.#message(error)}`);this.#setConnection(false,null);});
+  }
+
+  async #postBadge(path: '/icon' | '/agents' | '/usage' | '/orientation' | '/switcher', body: string): Promise<Response> {
     if (!this.#config || !this.#endpoint) throw new Error('The Wi-Fi device is not connected.');
     const response = await fetch(`${this.#endpoint}${path}`, {
       method: 'POST',
@@ -433,6 +458,7 @@ export class WifiTransport {
       this.#iconSignature = '';
       this.#activeSignature = '';
       this.#usageSignature = null;
+      this.#compactSignature = null;
     }
     if (changed) this.#changed();
   }

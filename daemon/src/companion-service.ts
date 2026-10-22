@@ -1,3 +1,6 @@
+import type {BrowsableSession} from './session-roster.js';
+import {isAgentId} from './agents/types.js';
+import {SessionFocus, type FocusAction, type SessionView} from './session-focus.js';
 import {LiveCaptions} from './live-captions.js';
 import {existsSync, readFileSync} from 'node:fs';
 import {mkdir, rename, writeFile} from 'node:fs/promises';
@@ -265,6 +268,36 @@ export class CompanionService extends EventEmitter {
   #captionTimer: NodeJS.Timeout | null = null;
   #captionRefreshAt = 0;
   readonly #captions: LiveCaptions;
+  readonly #focus = new SessionFocus();
+  #view: SessionView | undefined;
+  #viewKey = '';
+  #handlingHook = false;
+  #switchable: readonly BrowsableSession[] | null = null;
+  setSwitchableSessions(sessions:readonly BrowsableSession[] | null):void {
+    this.#switchable=sessions;this.#focus.setBrowseAll(sessions!==null);
+    for(const session of sessions??[])this.#captions.observe({sessionId:session.id,cwd:session.cwd});
+    this.syncUsage();
+  }
+  #presentationSnapshot() {
+    const snapshot=this.#coordinator.snapshot();
+    if(this.#switchable===null)return snapshot;
+    const now=Date.now();
+    const ids=new Set(this.#switchable.map(s=>s.id));
+    // Discovery controls idle membership, not whether genuine work/input is visible.
+    const sessions=snapshot.sessions.filter(s=>ids.has(s.id)||this.#focus.retains(s.id,now)||s.activeUntil>now||s.attentionUntil>now||s.subagents.some(a=>a.leaseUntil>now));
+    for(const item of this.#switchable)if(!sessions.some(s=>s.id===item.id))sessions.push({id:item.id,
+      activeUntil:0,attentionUntil:0,lastMainEventAt:0,lastSeenAt:0,hadWork:false,completionPending:false,subagents:[]});
+    return {...snapshot,sessions};
+  }
+
+  get switchableSessions(): readonly BrowsableSession[] {return this.#switchable??[];}
+  get sessionView(): SessionView | undefined { return this.#view; }
+  focusSession(action: FocusAction): boolean {
+    if (!this.#captions.enabled || this.#transport.demoFrame || this.#transport.installing) return false;
+    this.#focus.act(action,this.#coordinator.state,this.#presentationSnapshot(),this.#coordinator.drivingSessionIds,Date.now());
+    this.syncUsage();
+    return typeof action==='string' || (this.#view?.revision===action.revision && this.#view?.index===action.index);
+  }
   readonly #firmwareImage: () => FirmwareImage | null;
   #firmwareUpdating: FirmwareStatus['updating'] = null;
   #lastFirmware: FirmwareStatus['last'] = null;
@@ -336,7 +369,7 @@ export class CompanionService extends EventEmitter {
       this.syncUsage();
       if (Date.now() - this.#captionRefreshAt >= 5000) {
         this.#captionRefreshAt = Date.now();
-        void this.#captions.refresh(this.#coordinator.snapshot()).then(() => this.syncUsage());
+        void this.#captions.refresh(this.#presentationSnapshot()).then(() => this.syncUsage());
       }
     };
     this.#captionTimer = setInterval(tick, 500);
@@ -374,11 +407,19 @@ export class CompanionService extends EventEmitter {
 
   // Also called when sessions start and stop, since the line follows what is running.
   syncUsage(): void {
+    if (this.#handlingHook || this.stopping) return;
+    this.#view = this.#captions.enabled ? this.#focus.frame(this.#coordinator.state, this.#presentationSnapshot(),
+      this.#coordinator.drivingSessionIds, Date.now()) : undefined;
+    const state = this.#view?.state ?? this.#coordinator.state;
+    if (!this.#transport.demoFrame && this.#transport.state !== state) this.#transport.setState(state);
+    const key = JSON.stringify(this.#view);
+    if (key !== this.#viewKey) {this.#viewKey=key; this.syncBadges(); this.emit('change');}
     this.#transport.setUsage(this.#deviceUsageLines());
+    this.#transport.setCompact(this.#captions.compact(this.#view));
   }
 
   #deviceUsageLines(): string[] {
-    const caption = this.#captions.lines(this.#coordinator.state, this.#coordinator.snapshot(), Date.now(), this.#coordinator.drivingSessionIds);
+    const caption = this.#captions.lines(this.#view?.state ?? this.#coordinator.state, this.#presentationSnapshot(), Date.now(), this.#coordinator.drivingSessionIds, this.#view);
     if (caption) return caption;
     if (!this.#display.showUsage) return [];
     const agents = [...this.#coordinator.agentActivity().keys()];
@@ -427,7 +468,7 @@ export class CompanionService extends EventEmitter {
       drivingAgents: this.#coordinator.drivingAgents,
       badges: {
         enabled: this.#display.showAgentBadges,
-        active: this.#coordinator.agentBadgeRoles().active.map(item => ({id: item.id, role: roleName(item.role)})),
+        active: this.#focusedBadges().map(item => ({id: item.id, role: roleName(item.role)})),
         icons: statusIcons(this.#badgeIcons),
       },
       desktop: {
@@ -484,9 +525,31 @@ export class CompanionService extends EventEmitter {
 
   handleHook(agent: AgentId, event: HookEvent, payload: HookPayload): boolean {
     if (!isAgentEnabled(agent, true)) return false;
-    const accepted = this.#coordinator.handle(event, namespaceAgentPayload(agent, payload));
+    const namespaced = namespaceAgentPayload(agent, payload);
+    const ending=event==='agentStop'||event==='subagentStop' ? this.#coordinator.snapshot().sessions : [];
+    this.#handlingHook = true;
+    let accepted: boolean;
+    try {accepted = this.#coordinator.handle(event, namespaced);} finally {this.#handlingHook = false;}
+    if (accepted && payload.automaticApproval !== true && this.#captions.enabled) {
+      const id = String(namespaced.sessionId ?? namespaced.session_id ?? '');
+      if (event === 'userPromptSubmitted') this.#focus.prompt(id);
+      // Compare effective work before/after so a final child stop queues its parent,
+      // including agents that omit parentSessionId in their stop payload.
+      if(ending.length && (this.#switchable!==null || this.#coordinator.state!=='complete')) {
+        const now=Date.now();
+        for(const session of this.#coordinator.snapshot().sessions) {
+          const before=ending.find(s=>s.id===session.id);
+          if(!before || !(before.activeUntil>now || before.subagents.length) || session.activeUntil>now
+            || session.attentionUntil>now || session.subagents.length)continue;
+          const pending=this.#coordinator.acknowledgeCompletion(session.id);
+          const pulsing=this.#switchable!==null && this.#coordinator.state==='complete'
+            && this.#coordinator.drivingSessionIds.includes(session.id);
+          if(pending || pulsing)this.#focus.completed(session.id,now);
+        }
+      }
+    }
     if (accepted) {
-      this.#captions.observe(namespaceAgentPayload(agent, payload), event);
+      if (payload.automaticApproval !== true) this.#captions.observe(namespaceAgentPayload(agent, payload), event);
       this.syncUsage();
       if (!this.#lastAgentEvents.has(agent))
         void markAgentSeen(agent).catch(error => console.error(`[agents] ${error instanceof Error ? error.message : String(error)}`));
@@ -574,9 +637,18 @@ export class CompanionService extends EventEmitter {
     });
   }
 
+  #focusedBadges(): AgentBadgeActive[] {
+    if (!this.#display.showAgentBadges) return [];
+    const view = this.#view;
+    if (view?.sessionId) {
+      const id = view.sessionId.split(':')[0];
+      if (isAgentId(id)) return [{id,role:view.state==='attention'?'a':view.state==='complete'?'c':'w'}];
+    }
+    return this.#coordinator.agentBadgeRoles().active.slice(0,4);
+  }
+
   syncBadges(): void {
-    const active: AgentBadgeActive[] = this.#display.showAgentBadges
-      ? this.#coordinator.agentBadgeRoles().active.slice(0, 4) : [];
+    const active: AgentBadgeActive[] = this.#focusedBadges();
     this.#transport.setAgentBadges(this.#badgeIcons, active);
   }
 

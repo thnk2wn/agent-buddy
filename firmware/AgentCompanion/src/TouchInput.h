@@ -9,6 +9,14 @@ struct TouchGesture {
   int16_t startX = 0, startY = 0, endX = 0, endY = 0;
 };
 
+// Keep navigation gestures distinct from the character tap. Coordinates are already
+// transformed into the shared 466px content space, including on smaller boards.
+enum class SessionTouchAction : uint8_t { None, Pin, Next };
+inline SessionTouchAction sessionTouchAction(const TouchGesture& gesture, bool activeCaptions, bool compact = false) {
+  if (!activeCaptions || gesture.kind != TouchGestureKind::Tap) return SessionTouchAction::None;
+  return gesture.endY >= (compact ? 276 : 385) ? SessionTouchAction::Next : SessionTouchAction::Pin;
+}
+
 class TouchGestureTracker {
  public:
   bool sample(bool pressed, int16_t x, int16_t y, uint64_t milliseconds,

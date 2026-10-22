@@ -1,6 +1,7 @@
 #include "../firmware/AgentCompanion/src/DeviceCommands.h"
 #include "../firmware/AgentCompanion/src/OrientationSettings.h"
 #include <cassert>
+#include "../firmware/AgentCompanion/src/CompactCaption.h"
 #include <iostream>
 #include <string>
 
@@ -13,10 +14,22 @@ static DeviceCommand send(DeviceCommands& parser, const std::string& text) {
 }
 
 int main() {
-  static_assert(kDeviceProtocol == 12);
+  static_assert(kDeviceProtocol == 14);
   DeviceCommands parser;
+  assert(send(parser,"~Claude|idle|1|4|jax-api|A longer session title\n")==DeviceCommand::SetCompact);
+  const std::string longCaption="Claude|working|1|4|"+std::string(64,'p')+"|"+std::string(256,'t')+"|4294967295|1:claude:w,2:codex:i,3:claude:a,4:codex:w";
+  assert(longCaption.size()>387);
+  assert(send(parser,"~"+longCaption+"\n")==DeviceCommand::SetCompact);
+  char forwarded[DeviceCommands::kPayloadCapacity+1];
+  assert(parser.badgePacket(DeviceCommand::SetCompact,forwarded,sizeof(forwarded)));
+  assert(std::string(forwarded)=="~"+longCaption);
+  CompactCaption compact;assert(parseCompactCaption(forwarded+1,compact));
+  assert(std::strlen(compact.title)==256 && compact.targetCount==4);
+  assert(!parser.badgePacket(DeviceCommand::SetCompact,forwarded,388));
+  assert(send(parser,"~"+std::string(512,'x')+"\n")==DeviceCommand::Invalid);
+  assert(send(parser,"~\n")==DeviceCommand::SetCompact);
   for (DeviceCommand command : {DeviceCommand::Idle, DeviceCommand::Surprise, DeviceCommand::Working,
-                                DeviceCommand::Complete, DeviceCommand::Attention}) {
+                                DeviceCommand::Complete, DeviceCommand::Attention, DeviceCommand::Sleep}) {
     assert(send(parser, std::string("!") + commandName(command) + "\r\n") == command);
   }
   assert(send(parser, "s") == DeviceCommand::Capture);

@@ -54,3 +54,24 @@ test('file truncation and inode replacement restart the index instead of keeping
   await rename(path+'.new',path);
   assert.equal(await reader.read(path,'abc'),'Replacement');
 });
+
+test('Claude automatic titles update, while a manual name takes precedence over later AI titles',async t=>{
+ const path=await fixture(t),reader=new TranscriptTitles();
+ const ai=(name:string,id='abc')=>JSON.stringify({type:'ai-title',sessionId:id,aiTitle:name})+'\n';
+ await writeFile(path,ai('Project roadmap and next steps'));
+ assert.equal(await reader.read(path,'abc'),'Project roadmap and next steps');
+ await appendFile(path,ai('Updated roadmap'));
+ assert.equal(await reader.read(path,'abc'),'Updated roadmap');
+ await appendFile(path,title('My project name')+ai('Later automatic name')+title(''));
+ assert.equal(await reader.read(path,'abc'),'My project name');
+ assert.equal(await new TranscriptTitles().read(path,'abc'),'My project name');
+ await writeFile(path,ai('Wrong session','other')+JSON.stringify({type:'user',sessionId:'abc',message:'PRIVATE prompt'})+'\n');
+ assert.equal(await reader.read(path,'abc'),'');
+});
+
+test('automatic metadata beyond a large tool record is found within bounded subsequent scans',async t=>{
+ const path=await fixture(t),reader=new TranscriptTitles();
+ await writeFile(path,large+JSON.stringify({type:'ai-title',sessionId:'abc',aiTitle:'Large session title'})+'\n');
+ assert.equal(await reader.read(path,'abc'),'');
+ assert.equal(await reader.read(path,'abc'),'Large session title');
+});

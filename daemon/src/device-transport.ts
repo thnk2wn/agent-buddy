@@ -1,3 +1,6 @@
+import type {CompactCaption} from './compact-caption.js';
+import type {FocusAction} from './session-focus.js';
+import type {DemoFrame} from './device-demo.js';
 import type {CharacterState, DeviceNetwork, InstallProgress, WifiNetwork} from './protocol.js';
 import {UsbTransport, type UsbPort} from './usb-transport.js';
 import {WifiTransport} from './wifi-transport.js';
@@ -16,27 +19,39 @@ const samePressWithinMs = 10_000;
 
 export class DeviceTransport {
   #desired: CharacterState = 'idle';
+  #demo: DemoFrame | null = null;
+  #demoSent = '';
+
+  get demoFrame(): DemoFrame | null {return this.#demo;}
+  setDemo(frame: DemoFrame | null): void {
+    this.#demo = frame;
+    if (!frame) this.#demoSent = '';
+    this.#route();
+  }
   #badgeIcons: readonly AgentBadgeIconDefinition[] = [];
   #activeBadges: readonly AgentBadgeActive[] = [];
   #usage: readonly string[] = [];
+  #compact: CompactCaption | null = null;
   #installing = false;
   #mode: ConnectionMode = 'auto';
   #enabled = true;
   #lastPress: {presses: number; at: number} | null = null;
   readonly #missing: () => void;
   readonly #button: () => void;
-  readonly #usb = new UsbTransport(() => this.#route(), presses => this.#pressed(presses));
-  readonly #wifi = new WifiTransport(() => this.#route(), presses => this.#pressed(presses));
+  readonly #focus: (action: FocusAction) => void;
+  readonly #usb = new UsbTransport(() => this.#route(), presses => this.#pressed(presses), {focus:action=>this.#focused(action)});
+  readonly #wifi = new WifiTransport(() => this.#route(), presses => this.#pressed(presses), action=>{if(!this.#usb.connected)this.#focused(action);});
 
   // missingCharacter runs whenever a connected device reports that no pack is installed.
   // buttonPressed runs one time for each press of the device's BOOT button.
-  constructor(missingCharacter: () => void = () => undefined, buttonPressed: () => void = () => undefined) {
+  constructor(missingCharacter: () => void = () => undefined, buttonPressed: () => void = () => undefined, focus: (action: FocusAction) => void = () => undefined) {
     this.#missing = missingCharacter;
     this.#button = buttonPressed;
+    this.#focus = focus;
   }
 
   get state(): CharacterState {
-    return this.#desired;
+    return this.#demo?.state ?? this.#desired;
   }
 
   get connected(): boolean {
@@ -141,7 +156,9 @@ export class DeviceTransport {
   setAgentBadges(icons: readonly AgentBadgeIconDefinition[], active: readonly AgentBadgeActive[]): void {
     this.#badgeIcons = icons;
     this.#activeBadges = active;
-    this.#route();
+    if (this.#demo || this.#installing || !this.#enabled) return;
+    if (this.#usb.connected) this.#usb.setAgentBadges(this.#badgeIcons,this.#activeBadges);
+    else this.#wifi.setAgentBadges(this.#badgeIcons,this.#activeBadges);
   }
 
   // The lines shown at the bottom of the screen; none hides them.
@@ -149,9 +166,15 @@ export class DeviceTransport {
     this.#usage = [...lines];
     // Caption pages change without a character event. Re-routing would resend the current
     // state too, restarting animations/sound cues on firmware that treats it as an event.
-    if (this.#installing || !this.#enabled) return;
+    if (this.#demo || this.#installing || !this.#enabled) return;
     if (this.#usb.connected) this.#usb.setUsage(this.#usage);
     else this.#wifi.setUsage(this.#usage);
+  }
+
+  setCompact(caption: CompactCaption | null):void {
+    this.#compact=caption;
+    if(this.#demo || this.#installing || !this.#enabled)return;
+    (this.#usb.connected ? this.#usb : this.#wifi).setCompact(caption);
   }
 
   async reloadWifi(): Promise<void> {
@@ -249,6 +272,10 @@ export class DeviceTransport {
     }
   }
 
+  #focused(action: FocusAction): void {
+    if (!this.#demo && !this.#installing && this.#enabled) this.#focus(action);
+  }
+
   #pressed(presses: number): void {
     const now = Date.now();
     if (this.#lastPress?.presses === presses && now - this.#lastPress.at < samePressWithinMs) return;
@@ -259,16 +286,29 @@ export class DeviceTransport {
 
   #route(): void {
     if (this.#installing || !this.#enabled) return;
+    if (this.#demo) {
+      if (!this.connected) {this.#demoSent = '';return;}
+      const target = this.#usb.connected ? this.#usb : this.#wifi;
+      this.#wifi.setEnabled(!this.#usb.connected);
+      const signature = `${this.transport}:${this.address}:${this.#demo.key}`;
+      if (signature !== this.#demoSent) {target.setState(this.#demo.state);this.#demoSent = signature;}
+      target.setAgentBadges(this.#demo.icons, this.#demo.active);
+      target.setUsage(this.#demo.lines);
+      target.setCompact(null);
+      return;
+    }
     if (this.#usb.connected) {
       this.#wifi.setEnabled(false);
       this.#usb.setState(this.#desired);
       this.#usb.setAgentBadges(this.#badgeIcons, this.#activeBadges);
       this.#usb.setUsage(this.#usage);
+      this.#usb.setCompact(this.#compact);
     } else {
       this.#wifi.setEnabled(true);
       this.#wifi.setState(this.#desired);
       this.#wifi.setAgentBadges(this.#badgeIcons, this.#activeBadges);
       this.#wifi.setUsage(this.#usage);
+      this.#wifi.setCompact(this.#compact);
     }
     if (this.connected && this.character === 'none') this.#missing();
   }

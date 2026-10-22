@@ -21,6 +21,7 @@
 #include "src/AudioPlayer.h"
 #include "src/AgentBadges.h"
 #include "src/CharacterEffects.h"
+#include "src/CompactRenderer.h"
 #include "src/CharacterFrame.h"
 #include "src/Deadline.h"
 #include "src/DeviceCommands.h"
@@ -45,6 +46,7 @@ SpriteRenderer* patchRenderer = nullptr;
 FullFrameRenderer* fullFrameRenderer = nullptr;
 CharacterEffects* effects;
 AgentBadges agentBadges;
+CompactRenderer compactRenderer;
 tinfl_decompressor inflater;
 alignas(4) uint8_t inflateHistory[TINFL_LZ_DICT_SIZE];
 SpritePredictor spritePredictor;
@@ -73,6 +75,8 @@ NetworkManager network;
 OrientationSensor orientationSensor;
 ButtonPressTracker bootButton;
 uint32_t buttonPresses = 0;
+uint32_t focusPinPresses = 0, focusNextPresses = 0;
+CompactTouchSelection compactTouches;
 int16_t orientationOffsetTenths = 0;
 bool orientationDirty = false;
 constexpr char kPreferencesNamespace[] = "agent-companion";
@@ -107,6 +111,10 @@ bool updateOrientation() {
 
 struct Frame {
   uint16_t* pixels = nullptr;
+  uint16_t* compactPixels = nullptr;
+  bool compact = false;
+  CompactCaption caption;
+  const uint16_t* displayed() const {return compact ? compactPixels : pixels;}
   uint32_t renderUs = 0, motionUs = 0, decodeUs = 0, compositeUs = 0, eyesUs = 0, effectsUs = 0,
       inflateUs = 0, predictUs = 0;
   CharacterState state;
@@ -187,7 +195,10 @@ void animate(void*) {
     portEXIT_CRITICAL(&renderLock);
     if (!rendered) fatal(sprite.error());
     const int64_t effectStart = esp_timer_get_time();
-    if (!effects->render(frame->state, frame->pixels)) fatal(effects->error());
+    const auto caption = agentBadges.compact();
+    frame->compact = caption.enabled;frame->caption=caption;
+    if (frame->compact) compactRenderer.render(frame->pixels, frame->compactPixels, caption, start / 1000);
+    else if (!effects->render(frame->state, frame->pixels)) fatal(effects->error());
     frame->effectsUs = restoreUs + esp_timer_get_time() - effectStart;
     frame->renderUs = esp_timer_get_time() - start;
     frame->decodeUs = fullFrame ? 0 : patchRenderer->decodeUs;
@@ -196,6 +207,8 @@ void animate(void*) {
     frame->inflateUs = inflateTimeUs;
     frame->predictUs = predictTimeUs;
     xQueueSend(readyFrames, &frame, portMAX_DELAY);
+    // Allow the idle task/watchdog to run even when a costly pose misses the frame budget.
+    vTaskDelay(1);
   }
 }
 
@@ -246,7 +259,7 @@ bool captureFrame(const Frame& frame) {
   }
   const char end[] = "\nEND_FRAME\n";
   return writeCapture(reinterpret_cast<const uint8_t*>(header), length)
-      && writeCapture(reinterpret_cast<const uint8_t*>(frame.pixels), bytes)
+      && writeCapture(reinterpret_cast<const uint8_t*>(frame.displayed()), bytes)
       && writeCapture(reinterpret_cast<const uint8_t*>(end), sizeof(end) - 1);
 }
 
@@ -270,6 +283,7 @@ bool requestedMode(DeviceCommand command, CharacterMode& mode) {
     case DeviceCommand::Working: mode = CharacterMode::Working; return true;
     case DeviceCommand::Complete: mode = CharacterMode::Complete; return true;
     case DeviceCommand::Attention: mode = CharacterMode::Attention; return true;
+    case DeviceCommand::Sleep: mode = CharacterMode::Sleep; return true;
     default: return false;
   }
 }
@@ -686,6 +700,25 @@ void handleTouchGesture(const TouchGesture& gesture, const Frame& frame) {
   }
   if (gesture.kind != TouchGestureKind::Tap) return;
   if (!settings.isOpen()) {
+    if(frame.compact && frame.caption.revision && frame.caption.count) {
+      const auto input=compactTouches.tap(frame.caption,gesture.endX,gesture.endY,millis());
+      const auto sequence=network.recordSessionInput(input.index,input.revision,input.activate);
+      logMessage("TOUCH select=%u revision=%u presses=%u activate=%u\n",unsigned(input.index),unsigned(input.revision),unsigned(sequence),unsigned(input.activate));
+      if(compactTargetAt(frame.caption,gesture.endX,gesture.endY))compactRenderer.acknowledgeSelection(input.index,millis());
+      else if(input.activate)compactRenderer.acknowledgeTap(millis());
+      return;
+    }
+    // Captions occupy y=410..440. A generous target above/below them is easier to tap.
+    // When idle, preserve the character's playful tap animation.
+    const auto focusAction = sessionTouchAction(gesture, frame.compact || (agentBadges.activeCount() > 0 && agentBadges.usage().count > 0), frame.compact);
+    if (focusAction != SessionTouchAction::None) {
+      const bool next = focusAction == SessionTouchAction::Next;
+      if(frame.compact && !next)compactRenderer.acknowledgeTap(millis());
+      const uint32_t count = next ? ++focusNextPresses : ++focusPinPresses;
+      network.setFocusPresses(focusPinPresses, focusNextPresses);
+      logMessage("TOUCH focus=%s presses=%u\n", next ? "next" : "pin", static_cast<unsigned>(count));
+      return;
+    }
     const int x = gesture.endX - kCharacterFrameX, y = gesture.endY;
     if (x >= 0 && y >= 0 && x < kCharacterFrameWidth && y < kCharacterFrameHeight
         && frame.pixels[y * kCharacterFrameWidth + x] != 0) {
@@ -991,6 +1024,11 @@ bool handleBadgePacket(const char* packet, char* response, size_t responseSize) 
     snprintf(response, responseSize, "AGENTS accepted=%u", static_cast<unsigned>(agentBadges.activeCount()));
     return true;
   }
+  if (packet[0] == '~') {
+    if (!agentBadges.setCompactPacket(packet + 1)) return reject();
+    snprintf(response, responseSize, "SWITCHER accepted");
+    return true;
+  }
   if (packet[0] == '$') {
     if (!agentBadges.setUsagePacket(packet + 1)) return reject();
     snprintf(response, responseSize, "USAGE accepted=%u", static_cast<unsigned>(agentBadges.usage().count));
@@ -1113,10 +1151,13 @@ void processCommand(DeviceCommand command, const DeviceCommands& parser, const F
       break;
     case DeviceCommand::DefineAgentIcon:
     case DeviceCommand::SetAgentBadges:
+    case DeviceCommand::SetCompact:
     case DeviceCommand::SetUsage: {
       char response[96];
-      char packet[196];
-      snprintf(packet, sizeof(packet), "%c%s", badgePrefix(command), parser.payload());
+      char packet[DeviceCommands::kPayloadCapacity+1];
+      if(!parser.badgePacket(command,packet,sizeof(packet))) {
+        logMessage("COMMAND_ERROR packet exceeds forwarding capacity\n");break;
+      }
       handleBadgePacket(packet, response, sizeof(response));
       logMessage("%s\n", response);
       break;
@@ -1203,6 +1244,8 @@ void startCharacter() {
   for (auto& frame : frames) {
     frame.pixels = static_cast<uint16_t*>(allocate(kCharacterFrameWidth * kCharacterFrameHeight * 2,
         MALLOC_CAP_SPIRAM, "Framebuffer PSRAM allocation failed."));
+    frame.compactPixels = static_cast<uint16_t*>(allocate(kCharacterFrameWidth * kCharacterFrameHeight * 2,
+        MALLOC_CAP_SPIRAM, "Compact framebuffer PSRAM allocation failed."));
     std::memset(frame.pixels, 0, kCharacterFrameWidth * kCharacterFrameHeight * 2);
     Frame* pointer = &frame;
     xQueueSend(freeFrames, &pointer, portMAX_DELAY);
@@ -1402,7 +1445,7 @@ void loop() {
   uint32_t transferUs = 0;
   if (!settings.isOpen() && !prompt) {
     if (!display.flushFrame(
-            frame->pixels, kCharacterFrameX, 0, kCharacterFrameWidth, kCharacterFrameHeight))
+            frame->displayed(), kCharacterFrameX, 0, kCharacterFrameWidth, kCharacterFrameHeight))
       fatal(display.error());
   } else if (orientationChanged) {
     flushDisplay();

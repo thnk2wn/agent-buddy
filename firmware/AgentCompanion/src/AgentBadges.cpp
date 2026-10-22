@@ -243,3 +243,14 @@ int AgentBadges::findIcon(const char* id) const {
   return -1;
 }
 }
+
+namespace copilot {
+bool AgentBadges::setCompactPacket(const char* payload) {
+  CompactCaption next;
+  if (!parseCompactCaption(payload,next)) {fail("invalid switcher caption");return false;}
+  CriticalSection guard(lock_); compact_=next; return true;
+}
+CompactCaption AgentBadges::compact() const {
+  CriticalSection guard(lock_); return compact_;
+}
+}

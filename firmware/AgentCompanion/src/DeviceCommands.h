@@ -5,10 +5,10 @@
 namespace copilot {
 enum class DeviceCommand {
   None, Invalid, Capture, Heap, Info, UploadCharacter, ConfigureWifi, ScanWifi,
-  DefineAgentIcon, SetAgentBadges, SetUsage, GetOrientation, ConfigureOrientation,
-  Idle, Surprise, Working, Complete, Attention
+  DefineAgentIcon, SetAgentBadges, SetUsage, SetCompact, GetOrientation, ConfigureOrientation,
+  Idle, Surprise, Working, Complete, Attention, Sleep
 };
-constexpr unsigned kDeviceProtocol = 12;
+constexpr unsigned kDeviceProtocol = 14;
 
 inline const char* commandName(DeviceCommand command) {
   switch (command) {
@@ -17,13 +17,14 @@ inline const char* commandName(DeviceCommand command) {
     case DeviceCommand::Working: return "working";
     case DeviceCommand::Complete: return "complete";
     case DeviceCommand::Attention: return "attention";
+    case DeviceCommand::Sleep: return "sleep";
     default: return "invalid";
   }
 }
 
 constexpr DeviceCommand kModeCommands[] = {
   DeviceCommand::Idle, DeviceCommand::Surprise, DeviceCommand::Working,
-  DeviceCommand::Complete, DeviceCommand::Attention,
+  DeviceCommand::Complete, DeviceCommand::Attention, DeviceCommand::Sleep,
 };
 
 // The mode command with this name, or DeviceCommand::Invalid.
@@ -39,12 +40,14 @@ inline char badgePrefix(DeviceCommand command) {
     case DeviceCommand::DefineAgentIcon: return '%';
     case DeviceCommand::SetAgentBadges: return '&';
     case DeviceCommand::SetUsage: return '$';
+    case DeviceCommand::SetCompact: return '~';
     default: return '\0';
   }
 }
 
 class DeviceCommands {
  public:
+  static constexpr unsigned kPayloadCapacity = 512;
   DeviceCommand feed(char byte, uint64_t milliseconds) {
     if (!receiving_) {
       for (const PacketStart& start : kPacketStarts) {
@@ -80,9 +83,11 @@ class DeviceCommands {
           || byte == '-' || byte == '=' || byte == ',';
     else if (packet_ == Packet::Usage)
       allowed = alphaNum || byte == ' ' || byte == ',' || byte == '.' || byte == ':' || byte == '|';
+    else if (packet_ == Packet::Compact)
+      allowed = byte >= 32 && byte <= 126;
     else if (packet_ == Packet::Orientation)
       allowed = (byte >= '0' && byte <= '9') || byte == '-';
-    if (invalid_ || length_ == sizeof(text_) - 1 || !allowed) invalid_ = true;
+    if (invalid_ || length_ >= (packet_ == Packet::Compact ? sizeof(text_) - 1 : 191) || !allowed) invalid_ = true;
     else text_[length_++] = byte;
     return DeviceCommand::None;
   }
@@ -94,9 +99,15 @@ class DeviceCommands {
   }
 
   const char* payload() const { return text_; }
+  bool badgePacket(DeviceCommand command,char* out,size_t capacity) const {
+    const char prefix=badgePrefix(command);
+    const size_t length=std::strlen(text_);
+    if(!prefix || capacity<length+2)return false;
+    out[0]=prefix;std::memcpy(out+1,text_,length+1);return true;
+  }
 
  private:
-  enum class Packet : uint8_t { Mode, Wifi, Icon, Agents, Usage, Orientation };
+  enum class Packet : uint8_t { Mode, Wifi, Icon, Agents, Usage, Compact, Orientation };
   // A packet starts with its prefix and ends at '\n'; a mode packet ends with a mode name.
   struct PacketStart {
     char prefix;
@@ -109,6 +120,7 @@ class DeviceCommands {
     {'%', Packet::Icon, DeviceCommand::DefineAgentIcon},
     {'&', Packet::Agents, DeviceCommand::SetAgentBadges},
     {'$', Packet::Usage, DeviceCommand::SetUsage},
+    {'~', Packet::Compact, DeviceCommand::SetCompact},
     {'^', Packet::Orientation, DeviceCommand::ConfigureOrientation},
   };
   struct ByteCommand {
@@ -120,7 +132,7 @@ class DeviceCommands {
     {'h', DeviceCommand::Heap}, {'i', DeviceCommand::Info},
     {'u', DeviceCommand::UploadCharacter}, {'w', DeviceCommand::ScanWifi},
   };
-  char text_[192] = {};
+  char text_[kPayloadCapacity] = {};
   unsigned length_ = 0;
   uint64_t previous_ = 0;
   bool receiving_ = false, invalid_ = false;

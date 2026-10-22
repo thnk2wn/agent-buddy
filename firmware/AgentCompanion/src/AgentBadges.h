@@ -1,5 +1,6 @@
 #pragma once
 #include "CharacterMotion.h"
+#include "CompactCaption.h"
 #include <cstddef>
 #include <cstdint>
 #if defined(ARDUINO)
@@ -50,6 +51,8 @@ class AgentBadges {
   bool setUsagePacket(const char* payload);
   AgentBadgesSnapshot snapshot() const;
   UsageLines usage() const;
+  bool setCompactPacket(const char* payload);
+  CompactCaption compact() const;
   const char* error() const { return error_; }
   uint8_t activeCount() const { return activeCount_; }
 #if defined(ARDUINO)
@@ -66,6 +69,7 @@ class AgentBadges {
   ActiveAgentBadge active_[kMaxActiveAgentBadges] = {};
   uint8_t activeCount_ = 0;
   UsageLines usage_;
+  CompactCaption compact_;
   uint32_t revision_ = 0;
   const char* error_ = nullptr;
 #if defined(ARDUINO)
