@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {requestDaemon, streamDaemon} from './client.js';
+import {usesAutomaticApproval} from './codex-approval.js';
 import {characterStates, hookEvents, type HookEvent, type HookPayload} from './protocol.js';
 import {characterRequestValue} from './character-pack.js';
 import {isConnectionMode} from './connection-mode.js';
@@ -41,6 +42,9 @@ async function main(): Promise<void> {
       let headless: boolean | undefined;
       const hooks = normalizeAgentHook(parsed.agent, parsed.nativeEvent, payload)
         .filter(hook => hook.event !== 'notification' || !(headless ??= agentRunsHeadless(parsed.agent)));
+      if (parsed.agent === 'codex' && parsed.nativeEvent === 'PermissionRequest'
+          && await usesAutomaticApproval(payload) === true)
+        for (const hook of hooks) hook.payload.automaticApproval = true;
       for (const hook of hooks) await requestDaemon({type: 'hook', agent: parsed.agent, event: hook.event, payload: hook.payload}, 300);
     } catch {
       // Hooks are notifications only; a missing device or daemon must never block Copilot.

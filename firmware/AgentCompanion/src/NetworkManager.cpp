@@ -141,6 +141,7 @@ void NetworkManager::configureRoutes() {
   server.on("/state", HTTP_POST, [this] { handleState(); });
   server.on("/icon", HTTP_POST, [this] { handleBadge("Invalid icon"); });
   server.on("/agents", HTTP_POST, [this] { handleBadge("Invalid agents"); });
+  server.on("/switcher", HTTP_POST, [this] { handleBadge("Invalid switcher caption"); });
   server.on("/usage", HTTP_POST, [this] { handleBadge("Invalid usage"); });
   server.on("/orientation", HTTP_POST, [this] { handleOrientation(); });
   server.on("/character", HTTP_POST, [this] { handleCharacterResponse(); },
@@ -167,16 +168,20 @@ void NetworkManager::handleStatus() {
     const int length = usbDiagnostics_(usb, sizeof(usb));
     if (length < 0 || static_cast<size_t>(length) >= sizeof(usb)) std::strcpy(usb, "null");
   }
-  char response[704];
+  char inputs[800];
+  if(!sessionInputs_.json(inputs,sizeof(inputs)))std::strcpy(inputs,"[]");
+  char response[1800];
   snprintf(response, sizeof(response),
            "{\"deviceId\":\"%s\",\"hostname\":\"%s\",\"connected\":%s,\"boot\":%u,\"protocol\":%u,"
            "\"character\":\"%s\",\"patchRam\":\"adaptive\",\"ssidBase64\":\"%s\",\"firmware\":\"%s\","
-           "\"buttonPresses\":%u,\"firmwareApproval\":\"%s\",\"orientationOffsetTenths\":%s,"
+           "\"sessionInputs\":%s,"
+           "\"focusPinPresses\":%u,\"focusNextPresses\":%u,\"buttonPresses\":%u,\"firmwareApproval\":\"%s\",\"orientationOffsetTenths\":%s,"
            "\"board\":\"%s\",\"usb\":%s}",
            deviceId_, hostname_, connected_ ? "true" : "false",
            static_cast<unsigned>(bootId_), static_cast<unsigned>(kDeviceProtocol),
            upload_ ? upload_->installedId() : "none", encodedName, firmwareId_,
-           static_cast<unsigned>(buttonPresses_),
+           inputs,
+           static_cast<unsigned>(focusPinPresses_), static_cast<unsigned>(focusNextPresses_), static_cast<unsigned>(buttonPresses_),
            approval == FirmwareApproval::Waiting ? "waiting"
                : approval == FirmwareApproval::Allowed ? "allowed" : "none", orientation,
            board::kId, usb);

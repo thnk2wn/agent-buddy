@@ -1,0 +1,35 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Buddy · Activity history</title>
+<style>
+:root{color-scheme:dark;font:15px system-ui;background:#0c151d;color:#eaf6ff}body{max-width:1100px;margin:40px auto;padding:24px}a{color:#73e4cf}h1{font-size:34px}p{color:#afc2ce;line-height:1.5}.card{background:#142630;border:1px solid #2d4655;border-radius:16px;padding:20px;margin:20px 0}.state{font-size:24px;color:#74e4cb}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:12px 8px;text-align:left;border-bottom:1px solid #2d4655;vertical-align:top}th{color:#9ab7c8}small{display:block;color:#afc2ce;margin-top:5px}code{overflow-wrap:anywhere}button,input{background:#213c4b;border:1px solid #486474;color:white;border-radius:8px;padding:10px}input{width:260px}#error{color:#ffb3a7}.scroll{overflow:auto}details{margin-top:8px}#sessions{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:15px}.session{border-top:1px solid #2d4655;padding-top:12px}
+</style>
+<a href="/">← Recording controls</a><h1>Why is Buddy showing that?</h1>
+<p>Live hook history and the sessions holding the state. This view records routing metadata only—no prompts, command text, or tool results. The latest 250 events survive service restarts.</p>
+<div class="card"><div id="state" class="state">Connecting…</div><p id="explanation"></p><p id="focus"></p><button id="next">Next session</button> <button id="pin">Pin session</button><p id="gesture-help">On device: tap captions to switch. Swipe up for Settings.</p><div id="sessions"></div></div>
+<label>Filter by title, agent or session <input id="filter" placeholder="title, claude, or session ID"></label> <button id="pause">Pause updates</button><p id="error" role="alert"></p>
+<div class="card scroll"><table><thead><tr><th>Received</th><th>Agent / session</th><th>Hook</th><th>State change</th></tr></thead><tbody id="events"></tbody></table></div>
+<p>“Working” is a hook-based inference, not a CPU or terminal activity check. Work expires after 10 minutes without another event; input alerts after 30 minutes. A session can remain listed after it becomes inactive. Rejected events are older than events already processed. Events before this diagnostic was installed are unavailable. Titles come from saved session metadata; when none is exposed, the exact ID remains visible. Titles refresh periodically and are not saved in the event log.</p>
+<script>
+const $=id=>document.getElementById(id);let paused=false,latest;
+function el(tag,text){const n=document.createElement(tag);n.textContent=text;return n;}
+function time(at){return new Date(at).toLocaleTimeString();}
+function remaining(at){return at>Date.now()?Math.ceil((at-Date.now())/1000)+'s remaining, until '+time(at):'expired';}
+function render(s){latest=s;const meta=id=>s.sessionTitles?.[id]||{};const label=id=>meta(id).title||'Title unavailable';const matches=id=>[id,meta(id).title,meta(id).project].join(' ').toLowerCase().includes(filter);const filter=$('filter').value.trim().toLowerCase();$('state').textContent='Live: '+s.state+(s.demoActive?' · Device demo override: '+s.deviceState:'');
+ $('explanation').textContent=s.drivingSessionIds.length?'Driving sessions: '+s.drivingSessionIds.map(id=>meta(id).title||id).join(', '):'No session currently drives the display.';
+ const v=s.sessionView;$('focus').textContent=v?.sessionId ? `Device: ${meta(v.sessionId).title||meta(v.sessionId).project||v.sessionId} · ${v.state} · ${v.notice?'Completion notice':v.pinned?'Pinned':`${v.browsing?'Browse':'Auto'} ${v.index} of ${v.count}`}` : 'Device: no available session';
+ $('pin').textContent=v?.browsing?'Activate session':v?.pinned?'Unpin session':'Pin session';
+ $('gesture-help').textContent=v?.browsing?'Tap captions to browse all sessions, including idle ones. Tap character to activate, without pinning.':'Tap captions to switch active sessions; tap character to pin/unpin.';
+ for(const id of ['pin','next'])$(id).disabled=!v?.sessionId || v.notice || s.demoActive || (!v.browsing && !['working','attention'].includes(v.state));
+ const rows=[...s.sessions];for(const r of s.switchableSessions??[])if(!rows.some(x=>x.id===r.id))rows.push({id:r.id,reason:'Open, idle session',waitingOn:[],lastSeenAt:0});
+ $('sessions').replaceChildren();for(const x of rows.filter(x=>matches(x.id))){const n=el('div','');n.className='session';n.append(el('strong',label(x.id)),el('small',[x.id.split(':')[0],meta(x.id).project].filter(Boolean).join(' · ')),el('small',x.id),el('p',x.reason));
+ if(x.attentionUntil>Date.now())n.append(el('small','Input/error alert: '+remaining(x.attentionUntil)));
+ if(x.workingUntil>Date.now())n.append(el('small','Working: '+remaining(x.workingUntil)));
+ if(x.waitingOn.length)n.append(el('small','Waiting on: '+x.waitingOn.join(', ')));
+ if(x.subagents)n.append(el('small','Tracked subagents: '+x.subagents));
+ n.append(el('small',x.lastSeenAt?'Last event: '+time(x.lastSeenAt):'Available without recent activity'));$('sessions').append(n);}
+ $('events').replaceChildren();for(const e of s.events.slice().reverse().filter(e=>matches(e.sessionId||''))){const tr=el('tr','');tr.append(el('td',time(e.at)));const who=el('td',e.sessionId?label(e.sessionId):'Service timer');if(e.sessionId)who.append(el('small',[e.sessionId.split(':')[0],meta(e.sessionId).project].filter(Boolean).join(' · ')),el('small',e.sessionId));tr.append(who);
+ const what=el('td',e.nativeEvent||e.event);if(e.nativeEvent)what.append(el('small','Normalized: '+e.event));for(const k of ['tool','notification','source'])if(e[k])what.append(el('small',k+': '+e[k]));tr.append(what);
+ const change=el('td',e.before+' → '+e.after);change.append(el('small',e.automaticApproval?'Automatic review · no alert':e.accepted?'Accepted':'Ignored: out-of-order event'));tr.append(change);$('events').append(tr);}
+}
+async function poll(){if(paused)return;try{const r=await fetch('/diagnostics');const s=await r.json();if(!s.ok)throw Error(s.error||'Diagnostics unavailable');render(s);$('error').textContent='';}catch(e){$('error').textContent=e.message;}}
+$('filter').oninput=()=>{if(latest)render(latest)};$('pause').onclick=()=>{paused=!paused;$('pause').textContent=paused?'Resume updates':'Pause updates';if(!paused)poll();};for(const action of ['next','pin'])$(action).onclick=async()=>{try{const r=await fetch('/focus',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:action==='pin'&&latest?.sessionView?.browsing?'activate':action})});const result=await r.json();if(!r.ok||result.ok===false)throw Error(result.error||'Control failed');await poll();}catch(e){$('error').textContent=e.message;}};poll();setInterval(poll,2000);
+</script></html>

@@ -141,3 +141,54 @@ test('completion uses the actual completed session even when the last prompt bel
   assert.deepEqual(live.lines(coordinator.state,coordinator.snapshot(),now,coordinator.drivingSessionIds),['Codex finished','new task']);
   assert.deepEqual(live.lines(coordinator.state,coordinator.snapshot(),now+3000,coordinator.drivingSessionIds),['Actual latest task']);
 });
+
+test('approval requests and errors do not falsely say the user has an unanswered question',async t=>{
+ const home=await fixture(t),config=join(home,'task-captions.json');
+ await writeFile(config,JSON.stringify({enabled:true}));const live=new LiveCaptions(config,home,{});
+ const snapshot:PersistedCoordinatorState={version:1,sessions:[session('codex:a',100000)]};
+ live.observe({sessionId:'codex:a',notification_type:'permission_prompt'},'notification');await live.refresh(snapshot);
+ assert.ok(live.lines('attention',snapshot,1000)?.join(' ').includes('approval requested'));
+ live.observe({sessionId:'codex:a',notification_type:'agent_needs_input'},'notification');
+ assert.ok(live.lines('attention',snapshot,2000)?.join(' ').includes('needs input'));
+ snapshot.sessions[0]!.attentionReason='error';
+ assert.ok(live.lines('attention',snapshot,3000)?.join(' ').includes('hit an error'));
+});
+
+test('focused captions name the selected badge, include position, and read pinned long titles',async t=>{
+ const home=await fixture(t),config=join(home,'task-captions.json');await writeFile(config,JSON.stringify({enabled:true}));
+ const live=new LiveCaptions(config,home,{}),snapshot:PersistedCoordinatorState={version:1,sessions:[session('codex:a'),session('claude:b')]};
+ live.observe({sessionId:'codex:a',projectName:'Search',sessionTitle:'First title'});
+ live.observe({sessionId:'claude:b',projectName:'Jax',sessionTitle:'Fix candidate matching pagination and search results'});
+ await live.refresh(snapshot);
+ const view={state:'working' as const,sessionId:'claude:b',pinned:false,index:2,count:2,notice:false};
+ assert.deepEqual(live.lines('working',snapshot,1000,[],view),['Claude working 2:2','Jax']);
+ const pinned={...view,pinned:true};
+ assert.deepEqual(live.lines('working',snapshot,2000,[],pinned),['Claude pinned','Jax']);
+ assert.deepEqual(live.lines('working',snapshot,10000,[],pinned),['pagination and','search results']);
+ snapshot.sessions[1]!.activeUntil=0;
+ assert.deepEqual(live.lines('complete',snapshot,12000,[],{...view,state:'complete',notice:true}),['Claude finished','Jax']);
+});
+
+test('Claude automatic session titles reach device captions through the shared resolver',async t=>{
+ const home=await fixture(t),config=join(home,'task-captions.json');
+ await writeFile(config,JSON.stringify({enabled:true}));
+ const root=join(home,'.claude/projects/project');await mkdir(root,{recursive:true});
+ const path=join(root,'abc.jsonl');await writeFile(path,JSON.stringify({type:'ai-title',sessionId:'abc',aiTitle:'Project roadmap and next steps'})+'\n');
+ assert.equal((await sessionMetadata('claude','abc',{},home,{})).title,'Project roadmap and next steps');
+ const live=new LiveCaptions(config,home,{}),snapshot:PersistedCoordinatorState={version:1,sessions:[session('claude:abc')]};
+ live.observe({sessionId:'claude:abc',cwd:'/repos/kitchen-frame',transcript_path:path});await live.refresh(snapshot);
+ assert.deepEqual(live.lines('working',snapshot,1000),['Claude working','kitchen frame']);
+ assert.deepEqual(live.lines('working',snapshot,4000),['Project roadmap','and next steps']);
+});
+
+test('idle browsing keeps title pages and session count visible instead of playful or blank captions',async t=>{
+ const home=await fixture(t);const path=join(home,'task-captions.json');
+ await writeFile(path,JSON.stringify({enabled:true,idleMessages:['Silly phrase'],idleAfterSeconds:15}));
+ const live=new LiveCaptions(path,home,{});
+ const snapshot:PersistedCoordinatorState={version:1,sessions:[{...session('claude:a'),activeUntil:0}]};
+ live.observe({sessionId:'claude:a',cwd:'/repo',sessionTitle:'Project roadmap'});await live.refresh(snapshot);
+ const view={state:'idle' as const,sessionId:'claude:a',pinned:false,index:2,count:4,notice:false,browsing:true};
+ assert.deepEqual(live.lines('idle',snapshot,0,[],view),['Claude idle 2:4','repo']);
+ assert.deepEqual(live.lines('idle',snapshot,4000,[],view),['Project roadmap']);
+ assert.ok(live.lines('idle',snapshot,60000,[],view)?.length);
+});

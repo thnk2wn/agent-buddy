@@ -31,5 +31,18 @@ int main() {
   assert(!touch.sample(true, 100, 100, UINT64_C(5000000000), gesture));
   assert(touch.sample(false, 0, 0, UINT64_C(5000000010), gesture));
   assert(gesture.kind == TouchGestureKind::Tap);
+  using copilot::SessionTouchAction;
+  gesture.kind = TouchGestureKind::Tap;
+  gesture.endY = 275;
+  assert(copilot::sessionTouchAction(gesture,true,true)==SessionTouchAction::Pin);
+  gesture.endY = 276;
+  assert(copilot::sessionTouchAction(gesture,true,true)==SessionTouchAction::Next);
+  gesture.endY = 384;
+  assert(copilot::sessionTouchAction(gesture, true) == SessionTouchAction::Pin);
+  gesture.endY = 385;
+  assert(copilot::sessionTouchAction(gesture, true) == SessionTouchAction::Next);
+  assert(copilot::sessionTouchAction(gesture, false) == SessionTouchAction::None);
+  gesture.kind = TouchGestureKind::SwipeUp;
+  assert(copilot::sessionTouchAction(gesture, true) == SessionTouchAction::None);
   std::cout << "PASS: release-time taps, vertical swipes, diagonal rejection, debounce and long uptime\n";
 }

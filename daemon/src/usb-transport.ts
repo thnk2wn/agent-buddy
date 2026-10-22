@@ -1,3 +1,5 @@
+import {compactPacket, type CompactCaption} from './compact-caption.js';
+import type {FocusAction} from './session-focus.js';
 import {SerialPort, type SerialPortMock} from 'serialport';
 import {
   orientationPacket, orientationProtocol, parseOrientationLine, type DeviceOrientation,
@@ -28,7 +30,7 @@ import {
 
 const networkRefreshMs = 5000;
 // The newest firmware protocol this daemon knows; see kDeviceProtocol in DeviceCommands.h.
-const maxProtocol = 12;
+const maxProtocol = 14;
 // Requests in a row without an answer before the port counts as dead. A device that restarts
 // can leave the old port open but silent; closing it lets discovery or Wi-Fi take over.
 const deadLinkTimeouts = 3;
@@ -39,6 +41,7 @@ export type SerialPortClass = typeof SerialPort | typeof SerialPortMock;
 export interface UsbTransportOptions {
   serial?: SerialPortClass;
   requestTimeoutMs?: number;
+  focus?: (action: FocusAction) => void;
 }
 
 class AcknowledgementTimeout extends Error {
@@ -77,6 +80,7 @@ export class UsbTransport {
   #activeSignature = '';
   // What the device shows now; null until it is sent after a connect or restart.
   #usageSignature: string | null = null;
+  #compactSignature: string | null = null;
   #enabled = true;
   #character: string | null = null;
   #adaptivePatchRam = false;
@@ -95,12 +99,14 @@ export class UsbTransport {
   readonly #requestTimeoutMs: number;
   readonly #changed: () => void;
   readonly #button: (presses: number) => void;
+  readonly #focus: (action: FocusAction) => void;
 
   // `button` runs when the device's BOOT button is pressed, with the count since the device started.
   constructor(changed: () => void = () => undefined, button: (presses: number) => void = () => undefined,
               options: UsbTransportOptions = {}) {
     this.#changed = changed;
     this.#button = button;
+    this.#focus = options.focus ?? (()=>undefined);
     this.#serial = options.serial ?? SerialPort;
     this.#requestTimeoutMs = options.requestTimeoutMs ?? 5000;
   }
@@ -232,6 +238,16 @@ export class UsbTransport {
       .catch(error => console.error(`[usb] ${this.#message(error)}`));
   }
 
+  setCompact(caption:CompactCaption|null):void {
+    const packet=compactPacket(caption,this.#protocol);
+    if(this.#protocol<13 || packet===this.#compactSignature)return;
+    this.#commands=this.#commands.then(async()=>{
+      if(!this.connected || this.#protocol<13 || packet===this.#compactSignature)return;
+      await this.#request(packet,line=>line==='SWITCHER accepted');
+      this.#compactSignature=packet;
+    }).catch(error=>console.error(`[usb] ${this.#message(error)}`));
+  }
+
   // Disabling releases the serial port so a cable can provide power only.
   async setEnabled(enabled: boolean): Promise<void> {
     this.#enabled = enabled;
@@ -328,6 +344,7 @@ export class UsbTransport {
       this.#iconSignature = '';
       this.#activeSignature = '';
       this.#usageSignature = null;
+      this.#compactSignature = null;
       this.#answered = true;
       console.log(`[usb] ${info}`);
       console.log(`[usb] connected ${path}`);
@@ -599,6 +616,8 @@ export class UsbTransport {
         }
         continue;
       }
+      const focus = parseFocusLine(line);
+      if (focus) {this.#focus(focus); continue;}
       const presses = parseButtonLine(line);
       if (presses !== null) {
         this.#button(presses);
@@ -619,6 +638,7 @@ export class UsbTransport {
     this.#iconSignature = '';
     this.#activeSignature = '';
     this.#usageSignature = null;
+      this.#compactSignature = null;
     console.log(`[usb] device restarted character=${this.#character ?? 'unknown'}`);
     this.#changed();
     this.#refreshInfo();
@@ -713,4 +733,15 @@ export function isLikelyEsp32Port(
   if (platform === 'darwin') return /^\/dev\/(?:cu|tty)\.usbmodem/i.test(path);
   if (platform === 'win32') return /^COM\d+$/i.test(path);
   return /^\/dev\/tty(?:ACM|USB)\d+$/i.test(path);
+}
+
+export function parseFocusLine(line: string): FocusAction | null {
+  const selected=/^TOUCH select=([0-9]{1,2}) revision=([0-9]{1,10}) presses=([0-9]{1,10})(?: activate=([01]))?$/.exec(line);
+  if(selected) {
+    const index=Number(selected[1]),revision=Number(selected[2]),presses=Number(selected[3]);
+    return index>=1&&index<=99&&revision>=1&&revision<=0xffffffff&&presses>=1&&presses<=0xffffffff?{index,revision,...(selected[4]==='1'?{activate:true}:{})}:null;
+  }
+  const match = /^TOUCH focus=(next|pin) presses=([0-9]{1,10})$/.exec(line);
+  if (!match || Number(match[2]) < 1 || Number(match[2]) > 0xFFFFFFFF) return null;
+  return match[1] as FocusAction;
 }

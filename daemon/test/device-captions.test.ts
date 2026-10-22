@@ -14,3 +14,11 @@ test('caption-only changes do not replay animation events on either transport', 
   transport.setUsage(['A longer task', 'title']);
   assert.deepEqual(sent, [['On it','project'],['A longer task','title']]);
 });
+
+test('rotating badges alone does not replay animation or sounds',t=>{
+ t.mock.method(UsbTransport.prototype,'setState',()=>{throw Error('must not resend state');});
+ t.mock.method(WifiTransport.prototype,'setState',()=>{throw Error('must not resend state');});
+ const sent:unknown[]=[];t.mock.method(WifiTransport.prototype,'setAgentBadges',(_icons:unknown,active:unknown)=>sent.push(active));
+ const transport=new DeviceTransport();transport.setAgentBadges([],[{id:'claude',role:'w'}]);transport.setAgentBadges([],[{id:'codex',role:'w'}]);
+ assert.equal(sent.length,2);
+});

@@ -1,0 +1,24 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Agent Buddy · Device demo</title>
+<style>
+:root{color-scheme:dark;font:16px system-ui;background:#0c151d;color:#eaf6ff}body{max-width:820px;margin:8vh auto;padding:24px}header{color:#52d4eb;letter-spacing:.12em;font-size:12px}h1{font-size:38px;margin:12px 0}.muted{color:#96abb9;line-height:1.6}.card{background:#13242f;border:1px solid #29424f;border-radius:20px;padding:28px;margin:24px 0}#state{font-size:30px;margin:10px 0}#count{font-size:65px;font-weight:700;color:#69e6d0;min-height:78px}button{background:#233d4d;color:white;border:1px solid #395465;border-radius:10px;padding:13px 18px;font-size:15px;cursor:pointer;margin:5px 6px 5px 0}button:disabled{opacity:.4;cursor:default}.primary{background:#58dfc4;color:#09231e;font-weight:700;border:none}.danger{color:#ffc0b4}progress{width:100%;accent-color:#58dfc4;height:8px}input{display:block;background:#0b1821;color:white;border:1px solid #395465;border-radius:8px;padding:12px;margin:8px 0 16px;width:calc(100% - 26px)}label{color:#a9bfcc}#error{color:#ffb9a9;white-space:pre-wrap}details{margin-top:22px}summary{cursor:pointer}.tag{display:inline-block;border-radius:20px;background:#1e423e;padding:7px 12px;color:#7ae9d5;font-size:13px}
+</style>
+<p><a style="color:#73e4cf" href="/activity">Open activity inspector →</a></p><header>AGENT BUDDY / PHYSICAL DEVICE</header><h1>Ready for your close-up.</h1>
+<p class="muted">Record the device with your phone. Start gives you a 5-second lead-in, then plays a 55-second Claude demo. Live activity—including Codex—is isolated until you exit.</p>
+<div class="card"><span class="tag" id="isolation">Checking device…</span><h2 id="state">Loading</h2><p class="muted" id="context"></p><div id="count"></div><progress id="progress" value="0" max="55"></progress><p class="muted" id="instruction"></p>
+<button class="primary" id="start" data-action="start">Start · 5-second lead-in</button><button data-action="pause">Pause</button><button data-action="next">Next stage</button><button data-action="restart">Restart paused</button><button class="danger" data-action="exit">Exit to live activity</button></div>
+<p id="error" role="alert"></p><p class="muted">Ready 5s → Working 12s → Needs input 8s → Working 8s → Finished 4s → Quiet idle 8s → Sleeping 10s.<br>The ending stays isolated, giving you time to stop recording. Pause holds the sequence, not the character animation.</p>
+<details><summary>Stage another take</summary><label for="title">Session title</label><input id="title" value="Jobot Potential Impact"><label for="project">Project</label><input id="project" value="teamjobot"><button id="stage">Stage paused</button></details>
+<script>
+const $=id=>document.getElementById(id);let busy=false;
+function show(data){if(!data.demo)throw Error(data.error||'Demo unavailable');const s=data.demo;
+ $('isolation').textContent=s.active?'DEMO ISOLATED · CLAUDE ONLY':'LIVE ACTIVITY';$('state').textContent=s.label;$('context').textContent=[s.title,s.project].filter(Boolean).join(' · ');
+ const ended=s.stage===6 && !s.running && s.elapsedMs>=s.durationMs;
+ $('count').textContent=s.countdownMs>0?Math.ceil(s.countdownMs/1000):ended?'Take complete':s.running?Math.ceil((s.durationMs-s.elapsedMs)/1000)+'s':s.active?'Paused':'—';
+ const starts=[0,5000,17000,25000,33000,37000,45000];$('progress').value=(starts[s.stage]+s.elapsedMs)/1000;
+ $('instruction').textContent=!s.active?'Stage a demo to isolate the display.':ended?'Stop recording when ready. The device will stay isolated until you restart or exit.':s.countdownMs>0?'Lead-in: get your recording ready.':s.running?'Demo running. Live agent activity cannot interrupt it.':'Hit record on your phone, then press Start. The sequence begins after five seconds.';
+ document.querySelectorAll('[data-action]').forEach(b=>b.disabled=!s.active||busy);$('start').disabled=!s.active||s.running||busy;
+}
+async function poll(){if(busy)return;try{const r=await fetch('/status');show(await r.json());$('error').textContent='';}catch(e){$('error').textContent=e.message;}}
+async function command(action){busy=true;try{const context={title:$('title').value,project:$('project').value};const r=await fetch('/control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,context})});const data=await r.json();busy=false;show(data);$('error').textContent='';}catch(e){$('error').textContent=e.message;}finally{busy=false;}}
+document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>command(b.dataset.action));$('stage').onclick=()=>command('stage');poll();setInterval(poll,500);
+</script></html>

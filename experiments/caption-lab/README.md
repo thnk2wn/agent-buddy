@@ -47,9 +47,11 @@ identical tool events repeat; a changed title/status resets it. The device integ
 
 The live adapter reads explicit hook titles, Codex desktop sidebar `name` metadata
 (read-only SQLite, with the CLI session-name index as fallback), and Claude
-`custom-title` records from the matching session transcript under its own projects
-folder. It never substitutes prompts or tool arguments for a missing title. Claude
-sessions without a custom-title record show the project/status only. Reads are
+`custom-title` or `ai-title` records from the matching session transcript under its
+own projects folder. Manual titles take precedence over automatic titles. It never substitutes prompts or tool arguments for a missing title. Claude
+sessions without either saved title show the project/status only. After a service
+restart, both the inspector and device discover matching transcripts before new
+hooks arrive. Reads are
 bounded and refreshed every five seconds. Claude metadata is indexed incrementally
 from the beginning of the transcript, up to 2 MiB per session per refresh, with
 a 64 KiB record limit. Known titles survive growth; on a large resumed transcript,

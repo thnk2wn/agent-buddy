@@ -44,10 +44,13 @@ export const claudeAdapter: AgentAdapter = {
       if (type === 'idle_prompt') return normalized('claude', 'sessionEnd', payload, receiptTime);
       if (['permission_prompt', 'elicitation_dialog', 'elicitation_url_dialog', 'agent_needs_input'].includes(type))
         return notification(payload, receiptTime, type);
+      return []; // Completion, authentication and plugin notices do not request input.
     }
+    if (name === 'Stop') return normalized('claude', 'agentStop', {...payload, clearAttention: true}, receiptTime);
     if (name === 'PermissionRequest' || name === 'Elicitation'
         || (name === 'PreToolUse' && isTool(payload, 'AskUserQuestion', 'ExitPlanMode'))) {
-      return notification(payload, receiptTime);
+      return notification(payload, receiptTime, isTool(payload, 'AskUserQuestion', 'ExitPlanMode') || name === 'Elicitation'
+        ? 'agent_needs_input' : 'permission_prompt');
     }
     return normalized('claude', canonicalEvent(nativeEvent, payload), payload, receiptTime);
   },

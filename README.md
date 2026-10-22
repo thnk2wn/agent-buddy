@@ -31,6 +31,16 @@ desktop, with or without the device.
   <img src="preview/agent-companion-demo.gif" alt="The Copilot character cycling through Idle, Surprise, Working, Needs attention, and Complete states" width="360">
 </p>
 
+### Optional Ghostty session focusing (experiment)
+
+The opt-in switcher keeps running Claude Code sessions visible even when idle,
+alongside Codex desktop chats observed by the service. Tap captions to browse;
+tap the character to activate the selected Ghostty terminal or Codex chat without
+pinning it. Each tap holds your selection for 12 seconds, then active sessions
+rotate every 8 seconds. The background service owns
+this behavior; the inspector is optional. See
+[setup and limitations](experiments/session-launch/README.md).
+
 ## What this fork adds
 
 This personal fork builds on [Dan Wahlin’s Agent Buddy](https://github.com/DanWahlin/agent-buddy)
@@ -40,11 +50,24 @@ below do not include these changes.
 - **Readable task context:** agent/status and project captions, followed by long
   conversation titles across word-wrapped pages. An optional slow ticker is also
   available. Missing titles fall back to the project/status.
-- **Local title lookup:** Codex sidebar names and Claude custom session titles,
+- **Local title lookup:** Codex sidebar names and Claude manual or automatic session titles,
   read locally without sending them to a cloud service or substituting prompts
   or tool arguments for titles.
-- **Agent handoff:** a new user prompt selects that agent’s task; pending input
-  takes priority. Background tool activity does not continually restart the title.
+- **Session switcher:** with optional session launching enabled, running Claude sessions
+  and observed Codex desktop chats remain selectable while idle. Tap the title/footer
+  to cycle; tap the portrait to activate the selected terminal/chat. Selection stays
+  put for 12 seconds after each tap, then follows active work with 8-second rotation
+  across busy sessions and brief completion notices. Without that option, the original activity carousel and
+  pin/unpin behavior remain available. The inspector is optional.
+- **Direct session indicators:** protocol 14 shows up to four fixed numbered buttons
+  beside the portrait. Cyan pulses mean working, amber means input is needed, and
+  gray means idle. Tap a number to select and open that session in one action.
+  Background work stays visible while you browse an idle session.
+- **Compact portraits:** protocol 13 adds a 70% portrait layout for every pack,
+  including the stock characters. Agent/status stay above the portrait; a larger
+  32-pixel font shows up to three title lines, with the project and session counter
+  below. Long titles page every 6.5 seconds. See the
+  [layout and character-motion guide](experiments/switcher-layout/README.md).
 - **Idle personality:** customizable playful captions appear only after a quiet
   idle period (60 seconds by default). Active captions identify the agent and status.
 - **Firmware readability:** a complete Latin alphabet in the existing font, a
@@ -60,6 +83,10 @@ matching caption rendering. Configuration is through `task-captions.json`, with
 no Settings toggle yet. Custom Jobot/Jax character packs are supplied separately
 and are not included in this repository. A stock app update can replace a locally
 patched daemon.
+
+Run `npm run inspector` to reopen the local inspector (Node.js 24.11+ and the diagnostic companion service required).
+
+The [device demo and activity inspector](experiments/device-demo/README.md) adds an isolated recording sequence and recent hook history with session/timeout explanations. Claude completion also clears stale input alerts.
 
 See the [caption experiment guide](experiments/caption-lab/README.md) for the
 configuration, preview instructions, validation, and limitations. Captions are

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -102,6 +103,7 @@ bool loadPacks() {
 }  // namespace
 
 int main() {
+  const bool compactPreview = std::getenv("AGENT_COMPANION_COMPACT_PREVIEW") != nullptr;
 #ifdef _WIN32
   if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
     std::cerr << "Cannot use binary output for character frames.\n";
@@ -195,7 +197,7 @@ int main() {
     if (renderedCharacters[frameIndex] != character)
       std::memset(frame, 0, first.size() * sizeof(uint16_t));
     const bool rendered = sprite.render(state, frame);
-    if (!restored || !rendered || !effects.render(state, frame)) {
+    if (!restored || !rendered || (!compactPreview && !effects.render(state, frame))) {
       const char* renderError = sprite.error();
       std::cout << "ERR " << (effects.error() ? effects.error() : renderError) << '\n' << std::flush;
       continue;

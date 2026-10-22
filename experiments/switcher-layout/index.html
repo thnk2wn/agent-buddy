@@ -1,0 +1,53 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Jobot + Jax · Session switcher layout study</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#10171e;color:#e8f2f8;font:15px/1.5 system-ui,-apple-system,sans-serif}main{max-width:1340px;padding:36px;margin:auto}.eyebrow{font-size:12px;letter-spacing:.16em;color:#63cfe9;text-transform:uppercase}h1{font-size:32px;letter-spacing:-.035em;margin:8px 0}p{color:#a8bac8;max-width:860px}header{border-bottom:1px solid #2c3b49;padding-bottom:20px}.controls{display:flex;gap:12px;flex-wrap:wrap;margin:24px 0;align-items:end}label{display:grid;gap:5px;color:#a8bac8;font-size:12px}select,input,button{background:#1d2b38;border:1px solid #3b5164;color:#fff;padding:10px;border-radius:8px;font:inherit}input{width:360px}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:22px}.card{padding:20px 16px;background:#17222d;border:1px solid #2c3d4c;border-radius:16px}.card.recommended{border-color:#51cce1}.tag{font-size:11px;color:#76dfcc;height:18px}h2{font-size:19px;margin:5px 0 12px}.face{border:3px solid #41505b;border-radius:50%;width:min(100%,366px);height:auto;display:block;background:#000;margin:0 auto;box-shadow:0 12px 24px #0005;cursor:pointer}.small .face{width:190px}figcaption{font-size:13px;color:#9eb2c2;margin-top:14px;min-height:42px}.row{margin-top:24px}.row>h3{font-size:13px;text-transform:uppercase;letter-spacing:.1em;color:#92b0c4}.foot{margin-top:25px;padding:18px 20px;border-left:3px solid #5bbfd5;background:#14212b}.foot strong{color:#d5eefa}.meta{font-size:12px;margin-top:20px;color:#8399ab}button.active{border-color:#64d1d9}.caption{font-size:12px;color:#7fe7cf}.stats{font-size:12px;margin-top:7px;color:#b0c7d9}@media(max-width:850px){.grid{grid-template-columns:1fr}main{padding:20px}.face{width:320px}.controls input{width:min(100%,360px)}}
+</style><main><header><div class="eyebrow">Jobot + Jax / 466 × 466 AMOLED</div><h1>Make the session the thing you can read.</h1><p>Same characters. Less screen space for the portrait. More room for the title, agent and status—visible together, even when idle.</p></header>
+<div class="controls"><label>Session<select id="session"><option>Jobot potential impact</option><option selected>Project roadmap and next steps</option><option>Jobot tracker priority candidates</option><option>Investigate webhook memory usage and verify the production fix</option><option>Jobot Jax Agent Buddy</option></select></label><label>Custom title<input id="title" value="Project roadmap and next steps" maxlength="200"></label><label>Agent<select id="agent"><option>Claude</option><option>Codex</option></select></label><label>State<select id="state"><option>idle</option><option>working</option><option>attention</option><option>complete</option><option>sleep</option></select></label><button id="size">Smaller desk-size view</button><button id="page">Next title page</button></div>
+<div class="caption" id="readout"></div><div id="rows"></div>
+<div class="foot"><strong>Recommendation: compact portrait + larger text.</strong><p>Keep the agent and state at the top, the full session title in a stable three-line area, and the project underneath. A clear 2 / 4 indicator and next arrow stay visible. Tap the character to open; tap the title area to browse.</p><p>Long titles page within the title area only. They never disappear behind a status-only page. New activity does not move your selection.</p></div>
+<p class="meta">Layout study, not installed firmware. Portraits come from the existing character packs rendered by the native engine. The reference reproduces the current firmware glyphs and spacing. New text uses browser typography to explore the layout; the chosen font must be rasterized and validated on the device. Frames are representative poses, not an animation performance test. “Desk-size” is approximate; monitor scale varies. Existing packs are unchanged.</p></main>
+<script>
+const assets=/*ASSETS*/;const glyphs=/*GLYPHS*/;
+const $=id=>document.getElementById(id);const images={};let page=0;
+const variants=[{name:'Current proportions',scale:1,font:14,tag:'REFERENCE',desc:'Large portrait. Two tiny lines near the narrow edge. Title and context take turns.',key:'current'},
+{name:'Compact portrait',scale:.70,font:32,tag:'RECOMMENDED',desc:'Portrait 30% smaller. Large three-line title with agent, state and project always visible.',key:'compact'},
+{name:'Text first',scale:.55,font:36,tag:'MAXIMUM READABILITY',desc:'Portrait 45% smaller. Four title lines, with a bigger font and less visual personality.',key:'text'}];
+for(const character of ['jobot','jax']){
+ const row=document.createElement('section');row.className='row';row.innerHTML=`<h3>${character==='jobot'?'Jobot':'Jax'} / same session, three layouts</h3><div class="grid"></div>`;
+ for(const v of variants){const figure=document.createElement('div');figure.className='card'+(v.key==='compact'?' recommended':'');figure.innerHTML=`<div class="tag">${v.tag}</div><h2>${v.name}</h2><canvas class="face" width="466" height="466" data-character="${character}" data-layout="${v.key}"></canvas><figcaption>${v.desc}</figcaption><div class="stats" id="stats-${character}-${v.key}"></div>`;row.querySelector('.grid').append(figure);} $('rows').append(row);
+}
+function write(c,text,x,y,size,color='#eef5ff',weight=600){c.font=`${weight} ${size}px Arial, sans-serif`;c.fillStyle=color;c.textAlign='center';c.textBaseline='top';c.fillText(text,x,y);}
+function wrap(c,text,width,size){c.font=`600 ${size}px Arial, sans-serif`;const out=[];let line='';for(const word of text.split(/\s+/)){if(line&&c.measureText(line+' '+word).width>width){out.push(line);line='';}if(c.measureText(word).width>width){for(const ch of word){if(c.measureText(line+ch).width>width){out.push(line);line='';}line+=ch;}}else line=line?line+' '+word:word;}if(line)out.push(line);return out;}
+function originalWrap(text){const words=text.split(/\s+/),out=[];let l='';for(const word of words){if((l+' '+word).trim().length>18){if(l)out.push(l);l=word;}else l=(l+' '+word).trim();}if(l)out.push(l);return out;}
+function render(){
+ for(const canvas of document.querySelectorAll('canvas')){
+  const c=canvas.getContext('2d'),v=variants.find(v=>v.key===canvas.dataset.layout),im=images[canvas.dataset.character]?.[$('state').value];if(!im)continue;
+  c.clearRect(0,0,466,466);c.save();c.beginPath();c.arc(233,233,232,0,Math.PI*2);c.clip();c.fillStyle='#000';c.fillRect(0,0,466,466);
+  const title=$('title').value||'Untitled session',agent=$('agent').value,state=$('state').value,project=title.includes('roadmap')?'kitchen-frame':title.includes('tracker')?'jax-api':agent==='Codex'?'game':'teamjobot';
+  const color=agent==='Codex'?'#70dec4':'#efb388';
+  if(v.key==='current'){
+   c.drawImage(im,27,0);const lines=originalWrap(title),p=page%Math.max(1,Math.ceil(lines.length/2));
+   for(const [i,l]of lines.slice(p*2,p*2+2).entries()){c.fillStyle='#ecf1ff';const start=233-(l.length*12-2)/2;for(let k=0;k<l.length;k++){const rows=glyphs[l[k]]||[];for(let y=0;y<7;y++)for(let x=0;x<5;x++)if((rows[y]||0)&(1<<(4-x)))c.fillRect(start+k*12+x*2,410+i*17+y*2,2,2);}}
+   $('stats-'+canvas.dataset.character+'-'+v.key).textContent=`14px glyphs · 2 × 18 characters · ${Math.ceil(lines.length/2)} title pages + context page`;
+  }else{
+   const scale=v.scale;c.drawImage(im,(466-412*scale)/2, v.key==='compact'?10:12,412*scale,466*scale);
+   // Separate header from portrait and place the title in the wider middle/lower band.
+   c.fillStyle='#000';c.fillRect(70,22,326,44);
+   write(c,agent.toUpperCase(),170,36,20,color);write(c,state==='attention'?'INPUT':state.toUpperCase(),316,38,17,state==='attention'?'#ffd16f':'#9eafc0');
+   const n=v.key==='compact'?3:4,top=v.key==='compact'?282:250,step=v.key==='compact'?35:36;
+   const lines=wrap(c,title,v.key==='compact'?350:350,v.font),pages=Math.max(1,Math.ceil(lines.length/n)),p=page%pages;
+   const visible=lines.slice(p*n,p*n+n),start=top+Math.max(0,n-visible.length)*step*.25;
+   c.fillStyle='#000';c.fillRect(30,top-6,406,150);
+   visible.forEach((l,i)=>write(c,l,233,start+i*step,v.font));
+   write(c,project,233,398,18,'#9bafbf',500);
+   write(c,'‹   2 / 4   ›',233,428,19,'#75d8e2',600);
+   if(pages>1)write(c,`${p+1}/${pages}`,388,251,12,'#708594',500);
+   $('stats-'+canvas.dataset.character+'-'+v.key).textContent=`${v.font}px type · ${n} title lines · ${pages} title page${pages>1?'s':''} · persistent context`;
+  }
+  c.restore();
+ }
+ $('readout').textContent='Tap any preview to advance the title page. Physical character taps would activate the selected session.';
+}
+for(const character of Object.keys(assets)){images[character]={};for(const state of Object.keys(assets[character])){const im=new Image();im.onload=render;im.src=assets[character][state];images[character][state]=im;}}
+for(const id of ['title','agent','state'])$(id).oninput=()=>{page=0;render()};$('session').onchange=()=>{$('title').value=$('session').value;page=0;render()};$('size').onclick=()=>{document.body.classList.toggle('small');$('size').textContent=document.body.classList.contains('small')?'Large inspection view':'Smaller desk-size view';};$('page').onclick=()=>{page++;render()};for(const canvas of document.querySelectorAll('canvas'))canvas.onclick=()=>{page++;render()};
+</script></html>

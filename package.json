@@ -17,6 +17,9 @@
     "agents": "node tools/companion.mjs agents",
     "badges": "node tools/companion.mjs badges",
     "desktop": "npm install --prefix desktop --no-audit --no-fund && npm --prefix desktop start",
-    "website": "node website/scripts/build.mjs && node website/scripts/serve.mjs"
+    "website": "node website/scripts/build.mjs && node website/scripts/serve.mjs",
+    "inspector": "node tools/start-inspector.mjs",
+    "session-launch": "node tools/session-launch.mjs",
+    "test:session-launch": "npm run build --prefix daemon && node --test daemon/dist/test/ghostty-title-probe.test.js daemon/dist/test/session-launch.test.js daemon/dist/test/session-roster.test.js daemon/dist/test/session-focus.test.js daemon/dist/test/device-session-actions.test.js"
   }
 }

@@ -10,7 +10,8 @@ interface Scan {
   mtimeMs: number;
   pending: Buffer;
   skipping: boolean;
-  title: string;
+  customTitle: string;
+  aiTitle: string;
 }
 
 // Incrementally index metadata with bounded I/O and memory. Large prompt/tool records
@@ -26,7 +27,7 @@ export class TranscriptTitles {
       let scan = this.#scans.get(path);
       if (!scan || scan.identity !== identity || stat.size < scan.offset
           || (stat.size === scan.offset && stat.mtimeMs !== scan.mtimeMs)) {
-        scan = {identity, offset:0, mtimeMs:stat.mtimeMs, pending:Buffer.alloc(0), skipping:false, title:''};
+        scan = {identity, offset:0, mtimeMs:stat.mtimeMs, pending:Buffer.alloc(0), skipping:false, customTitle:'', aiTitle:''};
       }
       this.#scans.delete(path);
       this.#scans.set(path, scan);
@@ -58,15 +59,20 @@ export class TranscriptTitles {
       // A final valid JSON record need not have a newline; retain it for a later append.
       if (scan.offset === stat.size && !scan.skipping) this.#record(scan, sessionId);
       scan.mtimeMs = stat.mtimeMs;
-      return scan.title;
+      return scan.customTitle || scan.aiTitle;
     } finally {await file.close();}
   }
 
   #record(scan: Scan, sessionId: string): void {
     try {
       const row = JSON.parse(scan.pending.toString('utf8'));
-      if (row?.type === 'custom-title' && row.sessionId === sessionId && typeof row.customTitle === 'string')
-        scan.title = captionText(row.customTitle);
+      if (row?.sessionId !== sessionId) return;
+      // Claude's resume picker uses automatic titles unless the user renamed the session.
+      // A later AI title must never replace a manual name. Neither field is prompt content.
+      if (row.type === 'custom-title' && typeof row.customTitle === 'string')
+        scan.customTitle = captionText(row.customTitle) || scan.customTitle;
+      else if (row.type === 'ai-title' && typeof row.aiTitle === 'string')
+        scan.aiTitle = captionText(row.aiTitle) || scan.aiTitle;
     } catch { /* Partial, oversized and non-JSON records are not title metadata. */ }
   }
 }

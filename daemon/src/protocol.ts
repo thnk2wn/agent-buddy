@@ -2,7 +2,7 @@ import type {ConnectionMode} from './connection-mode.js';
 import type {AgentId, AgentStatus} from './agents/types.js';
 import type {DeviceOrientation} from './orientation-settings.js';
 
-export const characterStates = ['idle', 'surprise', 'working', 'complete', 'attention'] as const;
+export const characterStates = ['idle', 'surprise', 'working', 'complete', 'attention', 'sleep'] as const;
 export type CharacterState = typeof characterStates[number];
 
 export const hookEvents = [
@@ -43,6 +43,10 @@ export interface HookPayload {
 export type DaemonRequest =
   | {type: 'hook'; agent?: AgentId; event?: HookEvent | string; nativeEvent?: string; payload: HookPayload}
   | {type: 'send'; state: CharacterState}
+  | {type: 'activity'}
+  | ({type: 'sessionLaunch'} & import('./session-launch.js').LaunchCommand)
+  | {type: 'focus'; action: import('./session-focus.js').FocusAction}
+  | {type: 'demo'; action: import('./device-demo.js').DemoAction; context?: {project:string;title:string}}
   // The desktop app names itself, so the service knows it runs and where to start it from.
   | {type: 'status'; client?: 'desktop'; executable?: string; environment?: Record<string, string>; flasher?: number;
       version?: string}

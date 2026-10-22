@@ -1,5 +1,6 @@
 #pragma once
 
+#include "SessionInput.h"
 #include <cstddef>
 #include <cstdint>
 
@@ -47,6 +48,8 @@ class NetworkManager {
   const char* firmwareId() const { return firmwareId_; }
   uint32_t revision() const { return revision_; }
   // How many times the BOOT button was pressed since startup; GET /status reports it.
+  uint32_t recordSessionInput(uint8_t index,uint32_t revision,bool activate) {return sessionInputs_.push(index,revision,activate);}
+  void setFocusPresses(uint32_t pin, uint32_t next) { focusPinPresses_ = pin; focusNextPresses_ = next; }
   void setButtonPresses(uint32_t presses) { buttonPresses_ = presses; }
   // A Wi-Fi firmware update needs a BOOT press on the device. The daemon asks first (Waiting),
   // the press allows one upload (Allowed), and each state ends after kFirmwareApprovalMs.
@@ -122,5 +125,7 @@ class NetworkManager {
   uint32_t reconnectAt_ = 0;
   uint32_t revision_ = 0;
   uint32_t buttonPresses_ = 0;
+  SessionInputQueue sessionInputs_;
+  uint32_t focusPinPresses_ = 0, focusNextPresses_ = 0;
 };
 }

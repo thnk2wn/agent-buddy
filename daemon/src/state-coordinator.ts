@@ -32,7 +32,22 @@ interface SessionState extends Omit<PersistedSession, 'subagents'> {
   subagents: Map<string, PersistedSubagent>;
 }
 
+export interface ActivityEvent {
+  at: number;
+  event: string;
+  before: CharacterState;
+  after: CharacterState;
+  accepted: boolean;
+  automaticApproval?: boolean;
+  sessionId?: string;
+  nativeEvent?: string;
+  tool?: string;
+  notification?: string;
+  source?: string;
+}
+
 export interface StateCoordinatorOptions {
+  onEvent?: (event: ActivityEvent) => void;
   completeMs?: number;
   activeLeaseMs?: number;
   attentionLeaseMs?: number;
@@ -45,6 +60,7 @@ export interface StateCoordinatorOptions {
 }
 
 export class StateCoordinator {
+  readonly #onEvent: ((event: ActivityEvent) => void) | undefined;
   readonly #sessions = new Map<string, SessionState>();
   readonly #onState: (state: CharacterState) => void;
   readonly #onMutation: ((state: PersistedCoordinatorState) => void) | undefined;
@@ -62,6 +78,7 @@ export class StateCoordinator {
 
   constructor(onState: (state: CharacterState) => void, options: StateCoordinatorOptions = {}) {
     this.#onState = onState;
+    this.#onEvent = options.onEvent;
     this.#onMutation = options.onMutation;
     this.#now = options.now ?? Date.now;
     this.#completeMs = options.completeMs ?? 4000;
@@ -138,7 +155,32 @@ export class StateCoordinator {
     return activity;
   }
 
+  diagnostics() {
+    const now = this.#now();
+    return {state: this.#state, drivingSessionIds: [...this.#drivingSessionIds], sessions: this.snapshot().sessions.map(s => ({
+      id: s.id, lastSeenAt: s.lastSeenAt, workingUntil: s.activeUntil, attentionUntil: s.attentionUntil,
+      attentionReason: s.attentionReason, waitingOn: s.waitingOn ?? [], subagents: s.subagents.length,
+      reason: s.attentionUntil > now ? (s.attentionReason === 'error' ? 'Error alert awaiting recovery' : 'Input alert awaiting response')
+        : s.subagents.length ? 'Subagent work still tracked' : s.activeUntil > now ? 'Activity hook lease; no stop received yet'
+        : 'Inactive; retained for event ordering',
+    }))};
+  }
+
   handle(event: HookEvent, payload: HookPayload): boolean {
+    const before = this.#state;
+    const accepted = this.#handle(event, payload);
+    const short = (v: unknown) => typeof v === 'string' ? v.slice(0, 256) : undefined;
+    this.#onEvent?.({at:this.#now(), event, before, after:this.#state, accepted,
+      sessionId: short(this.#parentSessionId(payload) ?? this.#sessionId(payload)),
+      nativeEvent: short(payload.hook_event_name ?? payload.hookEventName),
+      tool: short(payload.toolName ?? payload.tool_name), notification: short(payload.notification_type),
+      source: short(payload.source), ...(payload.automaticApproval === true ? {automaticApproval:true} : {})});
+    return accepted;
+  }
+
+  #handle(event: HookEvent, payload: HookPayload): boolean {
+    // An automatically reviewed approval is diagnostic activity, not a user-facing wait.
+    if (event === 'notification' && payload.automaticApproval === true) return true;
     const now = this.#now();
     const occurredAt = this.#eventTime(payload, now);
     let sessionId = event === 'subagentStart' || event === 'subagentStop'
@@ -245,6 +287,7 @@ export class StateCoordinator {
   }
 
   sweep(): void {
+    const before = this.#state;
     const now = this.#now();
     let mutated = false;
     for (const [id, session] of this.#sessions) {
@@ -270,6 +313,15 @@ export class StateCoordinator {
     }
     if (mutated) this.#changed();
     else this.#recompute(now);
+    if (mutated) this.#onEvent?.({at:now,event:'leaseSweep',before,after:this.#state,accepted:true});
+  }
+
+  // A device completion notice consumed this pending turn while another session worked.
+  acknowledgeCompletion(id: string): boolean {
+    const session = this.#sessions.get(id);
+    if (!session?.completionPending) return false;
+    session.completionPending = false;
+    return true;
   }
 
   snapshot(): PersistedCoordinatorState {
@@ -431,7 +483,9 @@ export class StateCoordinator {
     this.#setState('complete');
     this.#completeTimer = setTimeout(() => {
       this.#completeTimer = undefined;
+      const before = this.#state;
       this.#recompute(this.#now());
+      this.#onEvent?.({at:this.#now(),event:'completionFinished',before,after:this.#state,accepted:true});
       this.#onMutation?.(this.snapshot());
     }, this.#completeMs);
   }
