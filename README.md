@@ -28,7 +28,9 @@ puts the same character, with the same animation, in a transparent window on you
 desktop, with or without the device.
 
 <p align="center">
-  <img src="preview/agent-companion-demo.gif" alt="The Copilot character cycling through Idle, Surprise, Working, Needs attention, and Complete states" width="360">
+  <img src="preview/agent-buddy-fork-demo.gif" alt="Native device preview showing numbered session switching, long-press pinning, input alerts, completion fireworks, idle captions, and sleep" width="520">
+  <br>
+  <em>Experimental fork preview · 22-second loop with staged activity and accelerated idle/sleep timing.</em>
 </p>
 
 ### Optional Ghostty session focusing (experiment)
