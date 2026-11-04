@@ -8,6 +8,7 @@ enum class AudioCue : uint8_t {
   Complete,
   Surprise,
   Settings,
+  SessionSwitch,
 };
 
 bool beginAudio();

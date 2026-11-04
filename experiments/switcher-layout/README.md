@@ -16,20 +16,27 @@ and older devices continue receiving the legacy two-line captions.
   the session counter. Agent, project and selected session remain visible.
 - Tap the portrait to activate the selected chat/terminal; tap anywhere in the
   title/footer area (y >= 276 in 466px content coordinates) to cycle sessions.
-  The existing settings swipe remains available. No automatic pinning.
+  Hold the portrait for 750 ms to toggle a persistent session pin. A progress ring,
+  drawn pin icon, and brief header confirmation acknowledge the hold. It never
+  activates a terminal on release. Swipe settings remains available.
 - Portrait taps give a 300 ms press-and-release animation immediately on the device.
   This acknowledges the tap, not successful terminal activation; launch results
   remain available in the service/inspector.
 - Protocol 14 adds four fixed session buttons with large numbers. The header
-  identifies the selected agent. Cyan pulses mean working, amber means input is needed,
-  and gray means idle. The selected button has a bright outline. Tap a button to
+  identifies the selected agent. Orbiting cyan dots mean working, an amber border and pulsing dot mean input is needed,
+  green briefly pulses after completion, and gray means idle. The selected button has a bright outline. Tap a button to
   select its session and activate the terminal/chat in one action.
 - More than four sessions use groups of four; cycling the footer or automatic
   activity rotation changes groups when needed. Numbers match the full roster.
-- Each tap holds the selected session for 12 seconds. Afterward, active sessions
+- Unless pinned, each tap holds the selected session for 12 seconds. Afterward, active sessions
   rotate every 8 seconds, with input requests and completion notices retained.
   Idle sessions remain in the manual cycle; character taps activate without pinning.
-- In switcher mode playful idle captions are replaced by persistent session context.
+- A pin keeps the portrait on its own session state, including its completion and
+  idle/sleep transitions. Background work/input never overrides it; indicators stay
+  live. Selecting a different session or closing the pinned session releases the pin.
+  Tapping the pinned portrait activates it without unpinning. Discovery refreshes
+  preserve pins; restarting the service resets them.
+- Quiet idle captions alternate with project context without replacing the title.
   Disabling session launching restores classic character layout and touch behavior.
 - Caption updates never trigger a character state change or replay audio.
 
@@ -61,6 +68,18 @@ staged in internal RAM before writing PSRAM. Center sampling preserves the board
 animation budget; four-tap filtering proved too costly on the ESP32-S3. The render
 task yields after each frame so a costly pose cannot starve the idle watchdog.
 The generated antialiased text font is DejaVu Sans; its license is beside the header.
+
+Text is drawn at native resolution, independently of portrait scaling. The final
+IMU-driven display rotation can still introduce jagged strokes: fractional angles
+use nearest-pixel scanout. Near a cardinal orientation, the display now snaps within
+5 degrees and remains snapped until 7 degrees, keeping slightly uneven desk mounts
+pixel-aligned without disabling intentional rotation. Touch uses the same snapped
+transform. Explicit alignment trim is applied afterward and can reintroduce fractional
+rotation. Both edges of the numbered session rings are antialiased.
+
+When diagnosing blurry type, compare a device framebuffer capture with its serial
+`ORIENTATION ... display_angle=...` report. The capture is **before** display rotation;
+a crisp capture alone does not prove that the final screen scanout is crisp.
 
 ## Preview and reproduce
 
@@ -106,3 +125,40 @@ activation taps retain their order. A new connection establishes a sequence
 baseline, avoiding replay. Stale roster revisions cannot activate another session.
 While an OS focus operation is in flight, later activating taps coalesce to the
 latest target; opt-in and live process identity are checked again before opening.
+
+### Compact effects and quiet captions
+
+The native preview and firmware share `CharacterEffects::render(..., compact)`.
+Restore source-frame effects before painting the next sprite, apply decorative
+attention/completion/sleep/surprise effects, then run `CompactRenderer`. Compact
+mode retains its own working trail, numbered indicators and antialiased text;
+the legacy moving badges and caption text are excluded. Top effects are fitted
+to the compact sampling area. Idle portraits that fall asleep also show the
+sleep status in the header.
+
+Configured `idleMessages` alternate with the project line for five seconds out
+of every ten after `idleAfterSeconds` (default 60). The session title and index
+remain visible. Changing sessions restarts the quiet timer. Any working or
+waiting session/subagent suppresses messages, including off-page sessions.
+Secondary-caption changes do not reset long-title paging or replay sounds.
+
+Validate with `bash tools/test_working_bits.sh`, `bash tools/test_device_inputs.sh`
+and `npm test` in `daemon/`. The compact effects test checks both framebuffers,
+art restoration, effect visibility, protected text and session-target pixels.
+
+
+Protocol 16 appends `|0` (auto-follow) or `|1` (pinned) after the revision/targets.
+It also adds target state `c`: a ten-second pulsing green completion border,
+cleared immediately by new work or attention. Older devices receive `i` for
+completed targets and their original packet format. Portrait holds send the
+finger-down session index and roster revision with `activate=0 pin=1` over USB;
+Wi-Fi uses `pin:true` in the ordered input queue. Invalid/stale revisions and
+combined pin+activate events are rejected. The first gesture on a dim/dark screen
+only wakes it. Physical button mappings are unchanged.
+
+Protocol 17 adds sound-only background alerts while pinned: working starts/resumes,
+new input requests, and actual completions use the existing device cues without
+changing its character. USB `+eventId|working/attention/complete` and authenticated
+Wi-Fi `POST /notify` share the same bounded deduplication. Events are not saved or
+replayed after reconnect; device volume/mute still applies. Automatic approvals
+and repeated tools/notifications do not create extra sounds.

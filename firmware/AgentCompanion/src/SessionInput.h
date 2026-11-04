@@ -4,13 +4,13 @@
 #include <cstdio>
 #include <cstring>
 namespace copilot {
-struct SessionInput {uint32_t sequence=0,revision=0;uint8_t index=0;bool activate=false;};
+struct SessionInput {uint32_t sequence=0,revision=0;uint8_t index=0;bool activate=false,pin=false;};
 class SessionInputQueue {
  public:
-  uint32_t push(uint8_t index,uint32_t revision,bool activate) {
+  uint32_t push(uint8_t index,uint32_t revision,bool activate,bool pin=false) {
     if(!++sequence_)++sequence_;
     if(count_==8){for(unsigned i=1;i<8;++i)inputs_[i-1]=inputs_[i];--count_;}
-    inputs_[count_++]={sequence_,revision,index,activate};return sequence_;
+    inputs_[count_++]={sequence_,revision,index,activate,pin};return sequence_;
   }
   bool json(char* out,size_t capacity) const {
     size_t used=0;
@@ -22,7 +22,7 @@ class SessionInputQueue {
     if(!capacity||!append("%s","["))return false;
     for(unsigned i=0;i<count_;++i) {
       const auto& v=inputs_[i];
-      if(!append("%s{\"sequence\":%u,\"index\":%u,\"revision\":%u,\"activate\":%s}",i?",":"",unsigned(v.sequence),unsigned(v.index),unsigned(v.revision),v.activate?"true":"false"))return false;
+      if(!append("%s{\"sequence\":%u,\"index\":%u,\"revision\":%u,\"activate\":%s,\"pin\":%s}",i?",":"",unsigned(v.sequence),unsigned(v.index),unsigned(v.revision),v.activate?"true":"false",v.pin?"true":"false"))return false;
     }
     return append("%s","]");
   }

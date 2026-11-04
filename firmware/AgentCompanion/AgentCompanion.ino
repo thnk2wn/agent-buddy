@@ -1,3 +1,5 @@
+#include "src/NotificationCue.h"
+#include "src/ScreenProtection.h"
 #include <Arduino.h>
 #include <Arduino_GFX_Library.h>
 #include <Preferences.h>
@@ -47,6 +49,7 @@ FullFrameRenderer* fullFrameRenderer = nullptr;
 CharacterEffects* effects;
 AgentBadges agentBadges;
 CompactRenderer compactRenderer;
+ScreenProtection screenProtection;
 tinfl_decompressor inflater;
 alignas(4) uint8_t inflateHistory[TINFL_LZ_DICT_SIZE];
 SpritePredictor spritePredictor;
@@ -197,8 +200,13 @@ void animate(void*) {
     const int64_t effectStart = esp_timer_get_time();
     const auto caption = agentBadges.compact();
     frame->compact = caption.enabled;frame->caption=caption;
-    if (frame->compact) compactRenderer.render(frame->pixels, frame->compactPixels, caption, start / 1000);
-    else if (!effects->render(frame->state, frame->pixels)) fatal(effects->error());
+    if (!effects->render(frame->state, frame->pixels, frame->compact)) fatal(effects->error());
+    if (frame->compact) {
+      auto displayedCaption = caption;
+      if (!std::strcmp(caption.state,"idle") && frame->state.mode == CharacterMode::Sleep)
+        std::strcpy(displayedCaption.state,"sleep");
+      compactRenderer.render(frame->pixels, frame->compactPixels, displayedCaption, start / 1000);
+    }
     frame->effectsUs = restoreUs + esp_timer_get_time() - effectStart;
     frame->renderUs = esp_timer_get_time() - start;
     frame->decodeUs = fullFrame ? 0 : patchRenderer->decodeUs;
@@ -684,6 +692,40 @@ void closeIdleSettings() {
 }
 
 void handleTouchGesture(const TouchGesture& gesture, const Frame& frame) {
+  // Bind a hold to the portrait seen at finger-down, even if auto-follow rotates
+  // during the gesture. Waking consumes the whole gesture, not just finger-down.
+  static bool wakeGesture=false;
+  static uint8_t holdIndex=0;
+  static uint32_t holdRevision=0;
+  const bool ended=gesture.kind==TouchGestureKind::Release || gesture.kind==TouchGestureKind::Tap ||
+    gesture.kind==TouchGestureKind::SwipeUp || gesture.kind==TouchGestureKind::SwipeDown;
+  if(wakeGesture) {if(ended)wakeGesture=false;return;}
+  if(screenProtection.touch(esp_timer_get_time()/1000)) {
+    display.setBrightness(settings.brightness());
+    wakeGesture=!ended;holdIndex=0;compactRenderer.holdProgress(0);
+    logMessage("SCREEN wake touch\n");return;
+  }
+  if(gesture.kind==TouchGestureKind::Press) {
+    holdIndex=0;
+    if(!settings.isOpen() && frame.compact && compactPortraitAt(frame.caption,gesture.startX,gesture.startY)) {
+      holdIndex=frame.caption.index;holdRevision=frame.caption.revision;
+      compactRenderer.holdProgress(millis());
+    }
+    return;
+  }
+  if(gesture.kind==TouchGestureKind::CancelHold || gesture.kind==TouchGestureKind::Release) {
+    holdIndex=0;compactRenderer.holdProgress(0);return;
+  }
+  if(gesture.kind==TouchGestureKind::LongPress) {
+    compactRenderer.holdProgress(0);
+    if(holdIndex && !settings.isOpen()) {
+      const auto sequence=network.recordSessionInput(holdIndex,holdRevision,false,true);
+      logMessage("TOUCH select=%u revision=%u presses=%u activate=0 pin=1 boot=%u\n",unsigned(holdIndex),unsigned(holdRevision),unsigned(sequence),unsigned(network.bootId()));
+      compactRenderer.acknowledgeTap(millis());
+    }
+    holdIndex=0;return;
+  }
+  holdIndex=0;compactRenderer.holdProgress(0);
   // Any gesture counts as activity, including ones the menu ignores.
   settingsActivityMs = millis();
   if (gesture.kind == TouchGestureKind::SwipeUp && !settings.isOpen()) {
@@ -703,7 +745,7 @@ void handleTouchGesture(const TouchGesture& gesture, const Frame& frame) {
     if(frame.compact && frame.caption.revision && frame.caption.count) {
       const auto input=compactTouches.tap(frame.caption,gesture.endX,gesture.endY,millis());
       const auto sequence=network.recordSessionInput(input.index,input.revision,input.activate);
-      logMessage("TOUCH select=%u revision=%u presses=%u activate=%u\n",unsigned(input.index),unsigned(input.revision),unsigned(sequence),unsigned(input.activate));
+      logMessage("TOUCH select=%u revision=%u presses=%u activate=%u boot=%u\n",unsigned(input.index),unsigned(input.revision),unsigned(sequence),unsigned(input.activate),unsigned(network.bootId()));
       if(compactTargetAt(frame.caption,gesture.endX,gesture.endY))compactRenderer.acknowledgeSelection(input.index,millis());
       else if(input.activate)compactRenderer.acknowledgeTap(millis());
       return;
@@ -1012,6 +1054,25 @@ bool handleBadgePacket(const char* packet, char* response, size_t responseSize) 
     snprintf(response, responseSize, "COMMAND_ERROR %s", agentBadges.error());
     return false;
   };
+  if(packet[0]=='+') {
+    static NotificationCue notifications;
+    NotificationSound sound;
+    if(!notifications.accept(packet+1,sound)) {
+      snprintf(response,responseSize,"COMMAND_ERROR invalid notification");return false;
+    }
+    bool queued=false;
+    if(sound==NotificationSound::Working)queued=queueAudioCue(AudioCue::Working);
+    if(sound==NotificationSound::Attention)queued=queueAudioCue(AudioCue::Attention);
+    if(sound==NotificationSound::Complete)queued=queueAudioCue(AudioCue::Complete);
+    if(sound==NotificationSound::SessionSwitch)queued=queueAudioCue(AudioCue::SessionSwitch);
+    snprintf(response,responseSize,"NOTIFY accepted queued=%u",unsigned(queued));return true;
+  }
+  if(packet[0]=='>') {
+    if(!screenProtection.packet(packet+1,esp_timer_get_time()/1000)) {
+      snprintf(response,responseSize,"COMMAND_ERROR invalid screen protection");return false;
+    }
+    snprintf(response,responseSize,"SCREEN accepted");return true;
+  }
   if (packet[0] == '%') {
     if (!agentBadges.setIconPacket(packet + 1)) return reject();
     const char* separator = std::strchr(packet + 1, ':');
@@ -1126,6 +1187,8 @@ void processCommand(DeviceCommand command, const DeviceCommands& parser, const F
                     board::variantName(board::variant()));
       // Which board the firmware is built for, so the app installs firmware only for this board. It
       // is its own line, so the app's INFO parsing is unchanged and the INFO line stays shorter.
+      logMessage("SCREEN level=%u brightness=%u\n",screenProtection.level(esp_timer_get_time()/1000),
+                 unsigned(screenProtection.brightness(settings.brightness(),esp_timer_get_time()/1000,settings.isOpen())));
       logMessage("BOARD id=%s variant=%s\n", board::kId, board::variantName(board::variant()));
       if (pack) {
         logMessage("CHARACTER id=%s layout=%s bytes=%u name=%s\n", pack->header.id,
@@ -1152,6 +1215,8 @@ void processCommand(DeviceCommand command, const DeviceCommands& parser, const F
     case DeviceCommand::DefineAgentIcon:
     case DeviceCommand::SetAgentBadges:
     case DeviceCommand::SetCompact:
+    case DeviceCommand::Notify:
+    case DeviceCommand::SetScreenProtection:
     case DeviceCommand::SetUsage: {
       char response[96];
       char packet[DeviceCommands::kPayloadCapacity+1];
@@ -1451,10 +1516,13 @@ void loop() {
     flushDisplay();
   }
   transferUs = esp_timer_get_time() - start;
-  if (fadeFrame <= 40) {
-    display.setBrightness(static_cast<uint8_t>(settings.brightness() * smoother(fadeFrame / 40.0f)));
-    ++fadeFrame;
+  const uint8_t protectedBrightness=screenProtection.brightness(settings.brightness(),esp_timer_get_time()/1000,settings.isOpen()||prompt);
+  const uint8_t desiredBrightness=fadeFrame<=40?static_cast<uint8_t>(protectedBrightness*smoother(fadeFrame/40.0f)):protectedBrightness;
+  static int shownBrightness=-1;
+  if(shownBrightness!=desiredBrightness || settings.isOpen() || prompt) {
+    display.setBrightness(desiredBrightness);shownBrightness=desiredBrightness;
   }
+  if(fadeFrame<=40)++fadeFrame;
   TouchGesture gesture;
   if (pollTouchGesture(gesture) && !prompt) handleTouchGesture(gesture, *frame);
   if (touchInputError()) fatal(touchInputError());

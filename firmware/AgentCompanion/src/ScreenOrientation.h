@@ -83,8 +83,11 @@ class DisplayOrientation {
   float angle() const { return angle_; }
 
  private:
-  static constexpr float kSnapEnter = 0.5f * kOrientationPi / 180.0f;
-  static constexpr float kSnapExit = 1.5f * kOrientationPi / 180.0f;
+  // Desk mounts and sensor alignment are rarely exact. Keep near-cardinal text
+  // pixel-aligned instead of resampling it for a few degrees of mounting error.
+  // Hysteresis avoids flickering between crisp and rotated scanout at the boundary.
+  static constexpr float kSnapEnter = 5.0f * kOrientationPi / 180.0f;
+  static constexpr float kSnapExit = 7.0f * kOrientationPi / 180.0f;
   float angle_ = 0.0f;
 };
 }

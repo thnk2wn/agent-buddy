@@ -5,10 +5,10 @@
 namespace copilot {
 enum class DeviceCommand {
   None, Invalid, Capture, Heap, Info, UploadCharacter, ConfigureWifi, ScanWifi,
-  DefineAgentIcon, SetAgentBadges, SetUsage, SetCompact, GetOrientation, ConfigureOrientation,
+  DefineAgentIcon, SetAgentBadges, SetUsage, SetCompact, Notify, SetScreenProtection, GetOrientation, ConfigureOrientation,
   Idle, Surprise, Working, Complete, Attention, Sleep
 };
-constexpr unsigned kDeviceProtocol = 14;
+constexpr unsigned kDeviceProtocol = 19;
 
 inline const char* commandName(DeviceCommand command) {
   switch (command) {
@@ -41,6 +41,8 @@ inline char badgePrefix(DeviceCommand command) {
     case DeviceCommand::SetAgentBadges: return '&';
     case DeviceCommand::SetUsage: return '$';
     case DeviceCommand::SetCompact: return '~';
+    case DeviceCommand::Notify: return '+';
+    case DeviceCommand::SetScreenProtection: return '>';
     default: return '\0';
   }
 }
@@ -83,7 +85,7 @@ class DeviceCommands {
           || byte == '-' || byte == '=' || byte == ',';
     else if (packet_ == Packet::Usage)
       allowed = alphaNum || byte == ' ' || byte == ',' || byte == '.' || byte == ':' || byte == '|';
-    else if (packet_ == Packet::Compact)
+    else if (packet_ == Packet::Compact || packet_ == Packet::Screen || packet_ == Packet::Notify)
       allowed = byte >= 32 && byte <= 126;
     else if (packet_ == Packet::Orientation)
       allowed = (byte >= '0' && byte <= '9') || byte == '-';
@@ -107,7 +109,7 @@ class DeviceCommands {
   }
 
  private:
-  enum class Packet : uint8_t { Mode, Wifi, Icon, Agents, Usage, Compact, Orientation };
+  enum class Packet : uint8_t { Mode, Wifi, Icon, Agents, Usage, Compact, Screen, Notify, Orientation };
   // A packet starts with its prefix and ends at '\n'; a mode packet ends with a mode name.
   struct PacketStart {
     char prefix;
@@ -121,6 +123,8 @@ class DeviceCommands {
     {'&', Packet::Agents, DeviceCommand::SetAgentBadges},
     {'$', Packet::Usage, DeviceCommand::SetUsage},
     {'~', Packet::Compact, DeviceCommand::SetCompact},
+    {'+', Packet::Notify, DeviceCommand::Notify},
+    {'>', Packet::Screen, DeviceCommand::SetScreenProtection},
     {'^', Packet::Orientation, DeviceCommand::ConfigureOrientation},
   };
   struct ByteCommand {

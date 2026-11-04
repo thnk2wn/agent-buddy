@@ -1,5 +1,5 @@
 import {isFocusAction,type FocusAction} from './session-focus.js';
-interface Input {sequence:number;index:number;revision:number;activate:boolean}
+interface Input {sequence:number;index:number;revision:number;activate:boolean;pin?:boolean}
 // Firmware retains a bounded chronological queue. Baseline on connect/reboot;
 // afterwards preserve gesture order and consume each event at most once.
 export class SessionInputTracker {
@@ -13,6 +13,20 @@ export class SessionInputTracker {
     if(new Set(fresh.map(v=>v.sequence)).size!==fresh.length)return [];
     fresh.sort((a,b)=>((a.sequence-this.#sequence)>>>0)-((b.sequence-this.#sequence)>>>0));
     if(fresh.length)this.#sequence=fresh.at(-1)!.sequence;
-    return fresh.map(({index,revision,activate})=>({index,revision,...(activate?{activate:true}:{})}));
+    return fresh.map(({sequence,index,revision,activate,pin})=>({index,revision,boot,sequence,...(activate?{activate:true}:{}),...(pin?{pin:true}:{})}));
+  }
+}
+
+// A physical input is exposed through USB immediately and Wi-Fi's retained queue
+// later. Keep receipts across route changes so a toggle can only run once.
+export class SessionInputReceipts {
+  #seen=new Set<string>();
+  accept(action:FocusAction):boolean {
+    if(typeof action==='string'||action.boot===undefined||action.sequence===undefined)return true;
+    const key=`${action.boot}:${action.sequence}`;
+    if(this.#seen.has(key))return false;
+    this.#seen.add(key);
+    if(this.#seen.size>128)this.#seen.delete(this.#seen.values().next().value!);
+    return true;
   }
 }

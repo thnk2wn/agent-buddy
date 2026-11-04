@@ -14,8 +14,11 @@ static DeviceCommand send(DeviceCommands& parser, const std::string& text) {
 }
 
 int main() {
-  static_assert(kDeviceProtocol == 14);
+  static_assert(kDeviceProtocol == 19);
   DeviceCommands parser;
+  assert(send(parser,"+1|complete\n")==DeviceCommand::Notify);
+  char notice[64];assert(parser.badgePacket(DeviceCommand::Notify,notice,sizeof(notice)));
+  assert(std::string(notice)=="+1|complete");
   assert(send(parser,"~Claude|idle|1|4|jax-api|A longer session title\n")==DeviceCommand::SetCompact);
   const std::string longCaption="Claude|working|1|4|"+std::string(64,'p')+"|"+std::string(256,'t')+"|4294967295|1:claude:w,2:codex:i,3:claude:a,4:codex:w";
   assert(longCaption.size()>387);

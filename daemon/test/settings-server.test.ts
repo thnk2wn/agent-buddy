@@ -1,3 +1,4 @@
+import type {FirmwareProtectionStatus} from '../src/firmware-protection.js';
 import assert from 'node:assert/strict';
 import {EventEmitter} from 'node:events';
 import {request} from 'node:http';
@@ -34,7 +35,7 @@ class FakeService extends EventEmitter {
   usage: Array<{enabled?: boolean; window?: string}> = [];
   usbFirmware = {release: '0.7.0', releaseId: null, flasher: true, port: '/dev/test', unanswered: false,
                  installing: null, last: null};
-  firmware = {device: 'aaaaaaaaaaaaaaaa', built: 'bbbbbbbbbbbbbbbb', canUpdate: true, updating: null, last: null,
+  firmware = {protection: undefined as FirmwareProtectionStatus | undefined, device: 'aaaaaaaaaaaaaaaa', built: 'bbbbbbbbbbbbbbbb', canUpdate: true, updating: null, last: null,
               usb: this.usbFirmware};
   firmwareUpdates = 0;
   usbInstalls = 0;
@@ -545,6 +546,14 @@ test('validates and performs actions', async () => {
     assert.equal((await call('/api/service/restart', {method: 'POST'})).status, 409);
     assert.equal((await call('/api/firmware/update', {method: 'GET'})).status, 404);
     assert.equal((await call('/api/firmware/update', {method: 'POST', token: false})).status, 401);
+    service.firmware.protection = {enabled:true,knownCustom:true,label:'Custom firmware protected',confirmation:'fresh'};
+    assert.equal((await call('/api/firmware/update', {method: 'POST'})).status, 409);
+    assert.equal((await call('/api/firmware/usb', {method:'POST',headers:json,body:'{"confirmed":true}'})).status,409);
+    assert.equal((await call('/api/firmware/usb', {method:'POST',headers:json,body:'{"confirmed":true,"replacementAcknowledgement":"stale"}'})).status,409);
+    assert.equal(service.usbInstalls,0);assert.equal(service.firmwareUpdates,0);
+    assert.equal((await call('/api/firmware/usb', {method:'POST',headers:json,body:'{"confirmed":true,"replacementAcknowledgement":"fresh"}'})).status,202);
+    service.usbInstalls=0;service.usbInstallPorts=[];service.usbInstallBoards=[];
+    service.firmware.protection=undefined;
     assert.equal((await call('/api/firmware/update', {method: 'POST'})).status, 202);
     assert.equal(service.firmwareUpdates, 1);
     service.firmware = {...service.firmware, built: service.firmware.device, canUpdate: false};

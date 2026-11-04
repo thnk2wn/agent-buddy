@@ -19,20 +19,28 @@ class CompactRenderer {
   // Display task writes; render task reads. A tap acknowledges receipt, not launch success.
   void acknowledgeTap(uint32_t now) {tapAt_.store(now?now:1,std::memory_order_release);}
   void acknowledgeSelection(uint8_t index,uint32_t now) {selectedTap_.store(index,std::memory_order_relaxed);selectionAt_.store(now?now:1,std::memory_order_release);}
+  void holdProgress(uint32_t now) {holdAt_.store(now,std::memory_order_release);}
   unsigned pages() const {return std::max(1u,(lineCount_+2)/3);}
-  void render(const uint16_t* source, uint16_t* out, const CompactCaption& caption, uint64_t now) {
-    if (std::strcmp(title_,caption.title) || std::strcmp(project_,caption.project) ||
+  void render(const uint16_t* source, uint16_t* out, const CompactCaption& receivedCaption, uint64_t now) {
+    CompactCaption caption=receivedCaption;
+    if(caption.desktopTick!=desktopTick_) {desktopTick_=caption.desktopTick;desktopSeenAt_=now;}
+    if(caption.desktopTick && now-desktopSeenAt_>=4000) {caption.desktopIndex=0;caption.desktopState='u';}
+    // Secondary idle captions must not restart a long title's paging clock.
+    if (std::strcmp(title_,caption.title) ||
         index_!=caption.index || std::strcmp(agent_,caption.agent)) {
       std::strcpy(title_,caption.title); std::strcpy(project_,caption.project);
       std::strcpy(agent_,caption.agent); index_=caption.index; started_=now; wrap();
     }
     const unsigned page=unsigned((now-started_)/6500)%pages();
+    if(pinKnown_ && caption.pinned!=lastPinned_)pinChangedAt_=now;
+    pinKnown_=true;lastPinned_=caption.pinned;
+    const bool pinFeedback=pinChangedAt_ && now-pinChangedAt_<1200;
     Cache* cache=&cache_[0];
     if(cache_[0].output && cache_[0].output!=out)cache=&cache_[1];
-    const bool changed=cache->output!=out || cache->page!=page || std::memcmp(&cache->caption,&caption,sizeof(caption));
+    const bool changed=cache->pinFeedback!=pinFeedback || cache->output!=out || cache->page!=page || std::memcmp(&cache->caption,&caption,sizeof(caption));
     if(changed) {
       std::memset(out,0,width*height*2);
-      cache->output=out;cache->caption=caption;cache->page=page;
+      cache->pinFeedback=pinFeedback;cache->output=out;cache->caption=caption;cache->page=page;
     }
     const uint32_t tapped=tapAt_.load(std::memory_order_acquire);
     const uint32_t elapsed=uint32_t(now)-tapped;
@@ -55,12 +63,14 @@ class CompactRenderer {
     }
     if(!std::strcmp(caption.state,"working"))workingEffects(out,now);
     indicators(out,caption,now,*cache,changed);
+    pinMarker(out,caption,now);
+    desktopMarker(out,caption);
     if(!changed)return;
     const auto white=rgb565(238,245,255), muted=rgb565(155,175,191), cyan=rgb565(117,216,226);
     text(out,caption.agent,170,31,20,rgb565(239,179,136));
     const char* status=!std::strcmp(caption.state,"attention")?"needs input":
       !std::strcmp(caption.state,"complete")?"finished":caption.state;
-    text(out,status,294,33,18,muted);
+    text(out,pinFeedback?(caption.pinned?"Pinned":"Auto-follow"):status,294,33,18,muted);
     const unsigned start=page*3;
     const unsigned count=std::min(3u,lineCount_-std::min(start,lineCount_));
     for(unsigned i=0;i<count;++i) text(out,lines_[start+i],233,276+int(i)*35+int(3-count)*8,32,white);
@@ -69,10 +79,28 @@ class CompactRenderer {
     char position[40];
     if(pages()>1) std::snprintf(position,sizeof(position),"< %u/%u >   %u/%u",caption.index,caption.count,page+1,pages());
     else std::snprintf(position,sizeof(position),"<  %u / %u  >",caption.index,caption.count);
+    if(caption.desktopTick) {
+      const char* cue=caption.desktopState=='c'?"Already open":caption.desktopState=='o'?"Tap to open":"Open session";
+      if(pages()>1)std::snprintf(position,sizeof(position),"%s %u/%u  %u/%u",cue,caption.index,caption.count,page+1,pages());
+      else std::snprintf(position,sizeof(position),"%s  %u/%u",cue,caption.index,caption.count);
+    }
     text(out,position,233,423,18,cyan);
   }
  private:
-  struct Cache {uint16_t* output=nullptr; CompactCaption caption; unsigned page=0;uint32_t indicatorVersions[4]={};};
+  uint32_t desktopTick_=0;uint64_t desktopSeenAt_=0;
+  void desktopMarker(uint16_t* out,const CompactCaption& caption) {
+    if(!caption.desktopTick||!caption.desktopIndex)return;
+    for(unsigned i=0;i<caption.targetCount;++i)if(caption.targets[i].index==caption.desktopIndex) {
+      const int cx=compactTargetX(i)-27,cy=compactTargetY(i)+36;
+      const auto color=swapBytes(rgb565(235,245,255));
+      for(int y=-6;y<=6;++y)for(int x=-9;x<=9;++x) {
+        const bool screen=(y>=-6&&y<=2&&(x==-9||x==9))||((y==-6||y==2)&&x>=-9&&x<=9);
+        const bool stand=(y>2&&y<6&&x==0)||(y==6&&x>=-5&&x<=5);
+        out[(cy+y)*width+cx+x]=(screen||stand)?color:0;
+      }
+    }
+  }
+  struct Cache {bool pinFeedback=false;uint16_t* output=nullptr; CompactCaption caption; unsigned page=0;uint32_t indicatorVersions[4]={};int8_t dotX[4]={},dotY[4]={};};
   struct IndicatorCache {CompactTarget target;bool selected=false,valid=false;uint32_t version=0;uint16_t pixels[56*56]={};};
   IndicatorCache indicators_[4];
   std::atomic<uint32_t> selectionAt_{0};
@@ -88,12 +116,18 @@ class CompactRenderer {
         for(int y=0;y<56;++y)for(int x=0;x<56;++x) {
           const int dx=x-28,dy=y-28;const int distance=dx*dx+dy*dy;
           uint16_t rgb=0;
-          if(distance<25*25)rgb=rgb565(14,25,35);
-          else if(distance<28*28) {
-            const float edge=std::clamp(27.5f-std::sqrt(float(distance)),0.f,1.f);
-            const float alpha=(selected?1.f:.42f)*edge;
-            rgb=rgb565(unsigned((selected?154:104)*alpha),unsigned((selected?230:158)*alpha),unsigned((selected?245:178)*alpha));
-          }
+          const float radius=std::sqrt(float(distance));
+          const float inner=std::clamp(radius-24.5f,0.f,1.f);
+          const float outer=std::clamp(27.5f-radius,0.f,1.f);
+          const bool attention=target.state=='a',complete=target.state=='c';
+          const float alpha=(selected?1.f:(attention||complete)?.82f:.42f)*inner*outer;
+          // Antialias BOTH edges of the ring; the old hard inner cutoff created
+          // stair steps even when the outer circumference was smooth.
+          const float fill=1.f-inner;
+          const unsigned red=attention?255:complete?103:selected?154:104;
+          const unsigned green=attention?190:complete?239:selected?230:158;
+          const unsigned blue=attention?77:complete?160:selected?245:178;
+          rgb=rgb565(unsigned(14*fill+red*alpha),unsigned(25*fill+green*alpha),unsigned(35*fill+blue*alpha));
           out[(top+y)*width+left+x]=swapBytes(rgb);
         }
         char number[4];std::snprintf(number,sizeof(number),"%u",target.index);
@@ -103,24 +137,74 @@ class CompactRenderer {
       } else if(cleared || frame.indicatorVersions[i]!=cache.version) {
         for(int y=0;y<56;++y)std::memcpy(out+(top+y)*width+left,cache.pixels+y*56,56*2);
       } else {
-        // Only four columns overlap the repainted portrait. Keep static buttons
-        // in each output buffer and restore the small status-dot area separately.
+        // Restore only portrait overlap and the last orbit-dot footprint in THIS
+        // output buffer. The other buffer can contain a different orbit phase.
         const int start=std::max(62,left),end=std::min(350,left+56);
         if(end>start)for(int y=0;y<56;++y)std::memcpy(out+(top+y)*width+start,cache.pixels+y*56+start-left,(end-start)*2);
-        for(int y=4;y<=14;++y)std::memcpy(out+(top+y)*width+left+42,cache.pixels+y*56+42,11*2);
+        const int x0=std::max(0,28+int(frame.dotX[i])-5),x1=std::min(56,28+int(frame.dotX[i])+6);
+        const int y0=std::max(0,28+int(frame.dotY[i])-5),y1=std::min(56,28+int(frame.dotY[i])+6);
+        for(int y=y0;y<y1;++y)std::memcpy(out+(top+y)*width+left+x0,cache.pixels+y*56+x0,(x1-x0)*2);
       }
       frame.indicatorVersions[i]=cache.version;
-      // Status pulses stay in fixed positions and never move the touch target.
+      // Working dots orbit a fixed, numbered touch target. Attention pulses in place.
       const float pulse=target.state=='i'?.32f:.68f+.32f*std::sin(float(now%2000)*3.14159265f/1000);
-      const unsigned red=target.state=='a'?255:target.state=='w'?91:147;
-      const unsigned green=target.state=='a'?187:target.state=='w'?221:164;
-      const unsigned blue=target.state=='a'?87:target.state=='w'?223:180;
+      const unsigned red=target.state=='a'?255:target.state=='w'?91:target.state=='c'?103:147;
+      const unsigned green=target.state=='a'?187:target.state=='w'?221:target.state=='c'?239:164;
+      const unsigned blue=target.state=='a'?87:target.state=='w'?223:target.state=='c'?160:180;
+      if(target.state=='c')for(int y=0;y<56;++y)for(int x=0;x<56;++x) {
+        const int dx=x-28,dy=y-28,dist=dx*dx+dy*dy;
+        if(dist<24*24 || dist>=28*28)continue;
+        const auto base=swapBytes(cache.pixels[y*56+x]);
+        out[(top+y)*width+left+x]=swapBytes(uint16_t((unsigned(((base>>11)&31)*pulse)<<11)|
+          (unsigned(((base>>5)&63)*pulse)<<5)|unsigned((base&31)*pulse)));
+      }
+      const float angle=float(now%2400)*6.2831853f/2400-1.5707963f;
+      const float dx=target.state=='w'?23.f*std::cos(angle):19.f;
+      const float dy=target.state=='w'?23.f*std::sin(angle):-19.f;
+      const int ox=int(std::round(dx)),oy=int(std::round(dy));
+      frame.dotX[i]=int8_t(ox);frame.dotY[i]=int8_t(oy);
       for(int y=-5;y<=5;++y)for(int x=-5;x<=5;++x) {
-        const float alpha=std::clamp(4.5f-std::sqrt(float(x*x+y*y)),0.f,1.f)*pulse;
-        if(alpha>0)out[(cy-19+y)*width+cx-27+19+x]=swapBytes(rgb565(unsigned(red*alpha),unsigned(green*alpha),unsigned(blue*alpha)));
+        const int px=ox+x,py=oy+y;
+        if(px < -28 || px>=28 || py < -28 || py>=28)continue;
+        const float fx=px-dx,fy=py-dy;
+        const float alpha=std::clamp(4.5f-std::sqrt(fx*fx+fy*fy),0.f,1.f)*pulse;
+        if(alpha>0)out[(cy+py)*width+cx-27+px]=swapBytes(rgb565(unsigned(red*alpha),unsigned(green*alpha),unsigned(blue*alpha)));
       }
     }
   }
+  void pinMarker(uint16_t* out,const CompactCaption& caption,uint64_t now) {
+    const auto held=holdAt_.load(std::memory_order_acquire);
+    const float progress=held?std::min(1.f,float(uint32_t(now)-held)/750):0;
+    if(!caption.pinned && !held)return;
+    // Larger tilted pushpin with a readable label, away from title and artwork.
+    for(int y=-18;y<=18;++y)for(int x=-18;x<=18;++x) {
+      float alpha=0;
+      if(held) {
+        const float distance=std::sqrt(float(x*x+y*y));
+        float angle=std::atan2(float(x),float(-y));if(angle<0)angle+=6.2831853f;
+        if(angle<=progress*6.2831853f)alpha=std::clamp(1.5f-std::abs(distance-16.f),0.f,1.f);
+      }
+      if(caption.pinned) {
+        // Inverse rotation; 2x2 coverage softens the diagonal edges.
+        float coverage=0;
+        for(float sy:{-.25f,.25f})for(float sx:{-.25f,.25f}) {
+          const float u=(x+sx)*.8192f+(y+sy)*.5736f;
+          const float v=-(x+sx)*.5736f+(y+sy)*.8192f;
+          if((v>=-10&&v<=-5&&std::abs(u)<=6)||
+             (v>=-5&&v<=2&&std::abs(u)<=3)||
+             (v>=2&&v<=5&&std::abs(u)<=8)||
+             (v>=5&&v<=14&&std::abs(u)<=1.2f))coverage+=.25f;
+        }
+        alpha=std::max(alpha,coverage);
+      }
+      if(alpha>0)out[(86+y)*width+318+x]=swapBytes(rgb565(unsigned(128*alpha),unsigned(232*alpha),unsigned(247*alpha)));
+    }
+    if(caption.pinned)text(out,"PIN",345,106,18,rgb565(128,232,247));
+  }
+
+  std::atomic<uint32_t> holdAt_{0};
+  bool pinKnown_=false,lastPinned_=false;
+  uint64_t pinChangedAt_=0;
   // Keep the original working effect's twelve-second cyan comet trail, fitted
   // around the compact portrait. Controls remain separate from decoration.
   static void workingEffects(uint16_t* out,uint64_t now) {

@@ -123,6 +123,7 @@ async function main() {
   }
 
   rmSync(output, {recursive: true, force: true});
+  cpSync(join(root, 'assets', 'audio'), join(output, 'assets', 'audio'), {recursive: true});
   const runtimeDaemon = join(output, 'daemon');
   mkdirSync(runtimeDaemon, {recursive: true});
   cpSync(join(daemon, 'dist', 'src'), join(runtimeDaemon, 'dist', 'src'), {recursive: true});

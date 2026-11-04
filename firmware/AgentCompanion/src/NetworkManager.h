@@ -7,6 +7,7 @@
 namespace copilot {
 class NetworkManager {
  public:
+  uint32_t bootId() const {return bootId_;}
   using CommandHandler = bool (*)(const char*);
   using BadgeHandler = bool (*)(const char* packet, char* response, size_t responseSize);
   // Writes a JSON object about the USB serial port for GET /status; returns its length.
@@ -48,7 +49,7 @@ class NetworkManager {
   const char* firmwareId() const { return firmwareId_; }
   uint32_t revision() const { return revision_; }
   // How many times the BOOT button was pressed since startup; GET /status reports it.
-  uint32_t recordSessionInput(uint8_t index,uint32_t revision,bool activate) {return sessionInputs_.push(index,revision,activate);}
+  uint32_t recordSessionInput(uint8_t index,uint32_t revision,bool activate,bool pin=false) {return sessionInputs_.push(index,revision,activate,pin);}
   void setFocusPresses(uint32_t pin, uint32_t next) { focusPinPresses_ = pin; focusNextPresses_ = next; }
   void setButtonPresses(uint32_t presses) { buttonPresses_ = presses; }
   // A Wi-Fi firmware update needs a BOOT press on the device. The daemon asks first (Waiting),

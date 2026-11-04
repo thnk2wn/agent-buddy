@@ -24,15 +24,24 @@ int main() {
   assert(menu.brightness() == 30);
   for (int i = 0; i < 20; ++i) menu.tap(290, 130);
   assert(menu.brightness() == 255);
-  assert(menu.tap(170, 180) == SettingsAction::SoundDown);
-  assert(menu.soundVolume() == 25);
-  assert(menu.tap(170, 180) == SettingsAction::SoundDown);
-  assert(menu.soundVolume() == 0);
-  assert(menu.tap(170, 180) == SettingsAction::SoundDown);
-  assert(menu.soundVolume() == 0);
-  for (int i = 0; i < 5; ++i) {
-    assert(menu.tap(290, 180) == SettingsAction::SoundUp);
+  for (int expected = 45; expected >= 0; expected -= 5) {
+    assert(menu.tap(170, 180) == SettingsAction::SoundDown);
+    assert(menu.soundVolume() == expected);
   }
+  assert(menu.tap(170, 180) == SettingsAction::SoundDown);
+  assert(menu.soundVolume() == 0);
+  for (int expected = 5; expected <= 100; expected += 5) {
+    assert(menu.tap(290, 180) == SettingsAction::SoundUp);
+    assert(menu.soundVolume() == expected);
+  }
+  assert(menu.tap(290, 180) == SettingsAction::SoundUp);
+  assert(menu.soundVolume() == 100);
+  // Existing persisted percentages need not be multiples of the UI step.
+  menu.setSoundVolume(2);
+  menu.tap(170, 180);
+  assert(menu.soundVolume() == 0);
+  menu.setSoundVolume(98);
+  menu.tap(290, 180);
   assert(menu.soundVolume() == 100);
   menu.setSoundVolume(255);
   assert(menu.soundVolume() == 100);
@@ -58,7 +67,7 @@ int main() {
   assert(compact.tap(400, 90) == SettingsAction::BrightnessUp);
   assert(compact.brightness() == 155);
   assert(compact.tap(60, 220) == SettingsAction::SoundDown);
-  assert(compact.soundVolume() == 25);
+  assert(compact.soundVolume() == 45);
   assert(compact.tap(400, 220) == SettingsAction::SoundUp);
   assert(compact.soundVolume() == 50);
   assert(compact.tap(233, 90) == SettingsAction::None);

@@ -6,12 +6,13 @@ import {join, basename, sep} from 'node:path';
 import {homedir} from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {TranscriptTitles} from './transcript-titles.js';
+import {t3Title} from './t3-titles.js';
 import {codexHome, claudeHome} from './agents/homes.js';
 import {CaptionPlayback, captionContextFromHook, captionText, wrapCaption, type CaptionMode} from './task-captions.js';
 import type {CharacterState, HookPayload, HookEvent} from './protocol.js';
 import type {PersistedCoordinatorState as PersistedState} from './state-coordinator.js';
 
-interface Metadata {project: string; title: string}
+interface Metadata {project: string; title: string; appTitle?: boolean}
 interface Source {payload: HookPayload; explicit: Metadata}
 export interface CaptionSettings {enabled: boolean; mode: CaptionMode; phrases: Partial<Record<CharacterState, string>>; idleAfterMs: number; idleMessages: string[]}
 const phrases: Record<CharacterState, string> = {
@@ -78,7 +79,8 @@ export async function sessionMetadata(agent: string, id: string, payload: HookPa
       result.title ||= await transcriptTitles.read(resolved, id);
     }
   }
-  return result;
+  const appTitle=t3Title(home,agent,id);
+  return appTitle ? {...result,title:appTitle,appTitle:true} : result;
 }
 
 export class LiveCaptions {
@@ -89,6 +91,8 @@ export class LiveCaptions {
   #promptSession = '';
   #selectedUntil = 0;
   #idleSince: number | null = null;
+  #compactIdleSince: number | null = null;
+  #compactIdleSession = '';
   #playback = new CaptionPlayback();
   #refreshing = false;
   #transcriptTitles = new TranscriptTitles();
@@ -138,13 +142,27 @@ export class LiveCaptions {
       }
     } finally {this.#refreshing = false;}
   }
-  compact(view?:SessionView):CompactCaption|null {
-    if(!this.#settings.enabled || !view?.browsing || !view.sessionId)return null;
+  compact(view?:SessionView, now=Date.now(), snapshot?:PersistedState):CompactCaption|null {
+    if(!this.#settings.enabled || !view?.browsing || !view.sessionId) {
+      this.#compactIdleSince=null;this.#compactIdleSession='';return null;
+    }
+    // Never show a playful phrase while another session (including a hidden fifth
+    // indicator or a subagent) is working or waiting for input.
+    const busy=snapshot ? snapshot.sessions.some(s=>s.activeUntil>now || s.attentionUntil>now || s.subagents.some(a=>a.leaseUntil>now))
+      : view.targets?.some(t=>t.state!=='i');
+    const quiet=['idle','sleep'].includes(view.state) && !busy;
+    if(!quiet || this.#compactIdleSession!==view.sessionId)this.#compactIdleSince=null;
+    this.#compactIdleSession=view.sessionId;
+    if(quiet)this.#compactIdleSince ??= now;
+    const elapsed=this.#compactIdleSince===null ? -1 : now-this.#compactIdleSince-this.#settings.idleAfterMs;
+    const messages=this.#settings.idleMessages;
+    const idleMessage=elapsed>=0 && elapsed%10000<5000 && messages.length
+      ? messages[Math.floor(elapsed/10000)%messages.length] : undefined;
     const explicit=this.#sources.get(view.sessionId)?.explicit, stored=this.#metadata.get(view.sessionId);
     const id=view.sessionId.split(':')[0] ?? 'agent';
     const agent=({codex:'Codex',claude:'Claude',copilot:'Copilot',grok:'Grok',hermes:'Hermes',openclaw:'OpenClaw'} as Record<string,string>)[id] ?? id;
-    return {agent,state:view.state,index:view.index,count:view.count,revision:view.revision,targets:view.targets,
-      title:explicit?.title || stored?.title || 'Untitled session',project:explicit?.project || stored?.project || id};
+    return {agent,state:view.state,...(view.desktop?{desktop:view.desktop}:{}),...(view.pinned?{pinned:true}:{}),index:view.index,count:view.count,revision:view.revision,targets:view.targets,
+      title:(stored?.appTitle ? stored.title : explicit?.title || stored?.title) || 'Untitled session',project:idleMessage || explicit?.project || stored?.project || id};
   }
   lines(state: CharacterState, snapshot: PersistedState, now = Date.now(), drivingSessionIds: readonly string[] = [], view?: SessionView): string[] | null {
     if (state === 'idle') this.#idleSince ??= now;
@@ -172,7 +190,7 @@ export class LiveCaptions {
     this.#selected = selected.id;
     const explicit = this.#sources.get(selected.id)?.explicit;
     const stored = this.#metadata.get(selected.id);
-    const metadata = {project:explicit?.project || stored?.project || '', title:explicit?.title || stored?.title || ''};
+    const metadata = {project:explicit?.project || stored?.project || '', title:(stored?.appTitle ? stored.title : explicit?.title || stored?.title) || ''};
     const agent = selected.id.split(':')[0] ?? '';
     const name = ({codex:'Codex',claude:'Claude',copilot:'Copilot',grok:'Grok',hermes:'Hermes',openclaw:'OpenClaw'} as Record<string,string>)[agent] || agent;
     const attentionPhrase = selected.attentionReason === 'error' ? 'hit an error'

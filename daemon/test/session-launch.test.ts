@@ -148,3 +148,37 @@ test('disable clears pending device activations without replay after re-enable',
  await launcher.command({action:'enable'});await new Promise(r=>setImmediate(r));
  assert.deepEqual(opened,[ids[0]]);
 });
+
+test('numbered terminal targets use full device roster positions, reject stale pairings and notify only after success',async t=>{
+ const x=await setup(t);await x.pair();await x.launcher.command({action:'enable'});
+ assert.deepEqual(await x.launcher.numberedTargets(['codex:other','claude:a']),[{terminalId:target,index:2}]);
+ const announced:string[]=[];x.launcher.onActivated=async id=>{announced.push(id);};await x.launcher.open('claude:a');
+ assert.deepEqual(announced,['claude:a']);x.setLive([]);
+ assert.deepEqual(await x.launcher.numberedTargets(['claude:a']),[]);
+ await assert.rejects(x.launcher.open('claude:a'));assert.equal(announced.length,1);
+});
+test('Ghostty labels compare before mutation and pass titles as data, never prompt or type',async()=>{
+ const calls:{script:string;args:string[]}[]=[];
+ const adapter=new GhosttyAdapter(async(script,args=[])=>{calls.push({script,args});return 'true';});
+ const title='My "title" $(command)';
+ await adapter.setTabTitle({id:'tab-one',title,terminals:[{id:target,title}]},target,'② '+title);
+ assert.deepEqual(calls[0]?.args,['tab-one',title,target,title,'② '+title]);
+ assert.match(calls[0]!.script,/tab.name\(\)!==args\[1\]/);
+ assert.doesNotMatch(calls[0]!.script,/prompt_tab_title|inputText|newWindow|sendKey|app.focus/);
+});
+test('desktop context requires exact live pairing, never last activation or title/cwd',async t=>{
+ const x=await setup(t);await x.pair();await x.launcher.command({action:'enable'});
+ const codex='codex:11111111-1111-1111-1111-111111111111';x.launcher.setDesktopSessions([codex]);
+ const ids=['claude:a',codex];
+ assert.deepEqual(await x.launcher.desktopContext({app:'com.mitchellh.ghostty',terminalId:target},ids,1000),
+ {at:1000,current:'claude:a',other:[codex]});
+ await x.launcher.open('claude:a');
+ assert.deepEqual(await x.launcher.desktopContext({app:'com.openai.codex',terminalId:null},ids,1100),
+ {at:1100,current:null,other:['claude:a']});
+ assert.deepEqual(await x.launcher.desktopContext({app:'com.mitchellh.ghostty',terminalId:null},ids,1200),
+ {at:1200,current:null,other:[codex]});
+ x.setLive([]);
+ assert.equal((await x.launcher.desktopContext({app:'com.mitchellh.ghostty',terminalId:target},ids,1300)).current,null);
+ await x.launcher.command({action:'disable'});
+ assert.deepEqual(await x.launcher.desktopContext({app:'com.brave.Browser',terminalId:null},ids,1400),{at:1400,current:null,other:[]});
+});

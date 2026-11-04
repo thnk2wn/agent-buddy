@@ -345,7 +345,7 @@ function renderStatus() {
   const soundsToggle = $('desktop-sounds-toggle');
   if (soundsToggle) {
     if (!desktopPending) soundsToggle.checked = desktop.sounds === true;
-    soundsToggle.disabled = desktop.visible === false;
+    soundsToggle.disabled = desktop.visible === false && !desktop.backgroundAudio;
   }
   const volume = $('desktop-volume');
   if (volume) {
@@ -353,7 +353,7 @@ function renderStatus() {
       volume.value = String(Number.isInteger(desktop.volume) ? desktop.volume : 30);
       showVolume();
     }
-    volume.disabled = desktop.visible === false || desktop.sounds !== true;
+    volume.disabled = (desktop.visible === false && !desktop.backgroundAudio) || desktop.sounds !== true;
   }
   renderDesktopApp();
   renderService();
@@ -1030,6 +1030,8 @@ function firmwareView(firmware) {
   if (usbRestarting(firmware.usb)) return {pill: 'Restarting…', kind: 'warning',
     until: firmware.usb.last.at + firmwareRestartMs, hint: 'The device is restarting into the new firmware.'};
   if (!status.connected) return {pill: 'Not connected', kind: 'offline', hint: 'Connect the device to see its firmware.'};
+  if (firmware.protection?.enabled) return {pill: firmware.protection.knownCustom ? 'Custom firmware installed' : 'Firmware protected', kind: 'usb',
+    hint: 'Stock Agent Buddy firmware would remove your custom features. A different firmware ID is not evidence of a newer build. Use reviewed fork builds; stock replacement requires explicit opt-in under USB recovery.'};
   if (otherBoard(firmware)) return {pill: 'Other board', kind: 'usb', hint: otherBoardHint(firmware)};
   if (!firmware.device) return {pill: 'Old firmware', kind: 'warning', update: true, overUsb: Boolean(firmware.usb?.release),
     hint: 'This firmware is older and does not report its version, so it cannot update over Wi-Fi. '
@@ -1132,6 +1134,8 @@ function usbFirmwareView(usb) {
     ? {pill: 'Unknown', kind: 'offline', hint: 'Update the companion service to install firmware here.'}
     : {pill: 'Checking…', kind: 'offline', hint: 'Waiting for the companion service…'};
   const release = usb.release ? `v${usb.release}` : null;
+  if (status?.firmware?.protection?.enabled && !usb.installing) return {pill:'Custom firmware protected',kind:'warning',
+    hint:'This downloads stock firmware from DanWahlin/agent-buddy, not Waveshare. Replacing it removes the custom layout, switcher feedback, screen protection, and volume changes. Protection remains on after replacement.'};
   if (usb.installing) return usbInstallView(usb);
   const last = usb.last;
   if (usbRestarting(usb))
@@ -1164,6 +1168,7 @@ function usbFirmwareView(usb) {
   return {pill: `Release ${release}`, kind: 'offline', hint: about};
 }
 
+let firmwareProtectionKey = '';
 function renderUsbFirmware() {
   const usb = status?.firmware?.usb;
   const view = usbFirmwareView(usb);
@@ -1173,10 +1178,15 @@ function renderUsbFirmware() {
   $('usb-firmware-hint').textContent = view.hint;
   renderBar($('usb-firmware-bar'), view.percent);
   const button = $('usb-firmware-install');
+  const protection = status?.firmware?.protection;
+  const key = protection?.confirmation ?? '';
+  if (key !== firmwareProtectionKey) {firmwareProtectionKey = key; $('custom-firmware-allow').checked = false;}
+  $('custom-firmware-replacement').hidden = !protection?.enabled;
   const action = !status?.connected ? 'Install'
     : usb?.releaseId && status.firmware?.device === usb.releaseId ? 'Reinstall' : 'Replace with';
   button.textContent = usb?.release ? `${action} v${usb.release}` : 'Install';
-  button.disabled = usbFirmwareBlocked(usb);
+  if (protection?.enabled) button.textContent = usb?.release ? `Replace custom firmware with v${usb.release}` : 'Replace custom firmware';
+  button.disabled = usbFirmwareBlocked(usb) || Boolean(protection?.enabled && (!protection.confirmation || !$('custom-firmware-allow').checked));
   renderBoardChoice(usb);
   // Recovery is for a device that does not answer at all; a device that answers updates with the row above.
   // Only for a device that does not answer; an install shows its progress in the row that started it.
@@ -1254,21 +1264,28 @@ async function installReleaseOverUsb() {
       throw new Error('Select the board of the device, then install again.');
     }
     const release = status.firmware.usb?.release;
+    const protection = status.firmware.protection;
+    if (protection?.enabled && (!$('custom-firmware-allow').checked || !protection.confirmation))
+      throw new Error('Explicitly allow stock replacement under USB recovery first.');
+    const replacementAcknowledgement = protection?.enabled ? protection.confirmation : undefined;
+    if (protection?.enabled && !await confirmAction('Replace your protected custom firmware with stock Agent Buddy firmware? This removes the custom layout, switcher feedback, pinning feedback, screen protection and quieter volume controls. This is a replacement, not an upgrade of your fork.', 'Replace custom firmware')) return;
     if (!await confirmAction(`Confirm that ${port} is your ${info.models}.\n\n`
       + `Install published release v${release} for the ${info.name}? `
       + 'Firmware for a different board can stop the device. This replaces the current firmware and partition table. '
       + 'Back up other firmware first. Wi-Fi settings stay, and the app then installs your character again.',
       'Install firmware')) return;
     await api('/api/firmware/usb', {method: 'POST', type: 'application/json',
-      body: JSON.stringify({port, board, confirmed: true})});
+      body: JSON.stringify({port, board, confirmed: true, replacementAcknowledgement})});
   } catch (error) {
     toast(error.message, 'error');
   } finally {
     usbFirmwarePending = false;
+    $('custom-firmware-allow').checked = false;
     renderFirmware();
   }
 }
 
+$('custom-firmware-allow').addEventListener('change', renderUsbFirmware);
 $('usb-firmware-install').addEventListener('click', () => void installReleaseOverUsb());
 
 $('firmware-update').addEventListener('click', async () => {

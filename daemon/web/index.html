@@ -423,6 +423,10 @@
         <summary>USB release install or recovery</summary>
         <p class="hint">Use this only to set up a new device or to repair one that does not answer.
           To update a working device, use <strong>Device firmware</strong> above.</p>
+        <label id="custom-firmware-replacement" hidden>
+          <input type="checkbox" id="custom-firmware-allow">
+          Allow replacing protected custom firmware with stock Agent Buddy firmware. This removes fork features.
+        </label>
         <div class="usb-port-control">
           <label for="usb-firmware-port">USB device</label>
           <div class="field-row"><select id="usb-firmware-port"><option value="">Detect a device first</option></select>
@@ -484,7 +488,7 @@
       <label class="setting-row" for="desktop-sounds-toggle">
         <span>
           <strong>Play sounds</strong>
-          <span class="hint">The desktop app plays the device's sounds when the character starts work, needs attention, finishes, or is tapped. Sounds are off until you turn them on. The lower button on the case also turns them on or off.</span>
+          <span class="hint">The desktop app plays the device's sounds when the character starts work, needs attention, finishes, or is tapped. Sounds are off until you turn them on. On macOS, turn off Show on desktop to hear alerts through your Mac’s current audio output even with the character hidden. Alerts also work with this app closed if the companion service remains running. The lower button on the onscreen case also turns sounds on or off.</span>
         </span>
         <input id="desktop-sounds-toggle" class="toggle" type="checkbox" role="switch">
       </label>

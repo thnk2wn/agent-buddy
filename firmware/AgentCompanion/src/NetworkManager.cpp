@@ -141,6 +141,8 @@ void NetworkManager::configureRoutes() {
   server.on("/state", HTTP_POST, [this] { handleState(); });
   server.on("/icon", HTTP_POST, [this] { handleBadge("Invalid icon"); });
   server.on("/agents", HTTP_POST, [this] { handleBadge("Invalid agents"); });
+  server.on("/notify", HTTP_POST, [this] { handleBadge("Invalid notification"); });
+  server.on("/screen", HTTP_POST, [this] { handleBadge("Invalid screen protection"); });
   server.on("/switcher", HTTP_POST, [this] { handleBadge("Invalid switcher caption"); });
   server.on("/usage", HTTP_POST, [this] { handleBadge("Invalid usage"); });
   server.on("/orientation", HTTP_POST, [this] { handleOrientation(); });
@@ -168,9 +170,9 @@ void NetworkManager::handleStatus() {
     const int length = usbDiagnostics_(usb, sizeof(usb));
     if (length < 0 || static_cast<size_t>(length) >= sizeof(usb)) std::strcpy(usb, "null");
   }
-  char inputs[800];
+  char inputs[1000];
   if(!sessionInputs_.json(inputs,sizeof(inputs)))std::strcpy(inputs,"[]");
-  char response[1800];
+  char response[2000];
   snprintf(response, sizeof(response),
            "{\"deviceId\":\"%s\",\"hostname\":\"%s\",\"connected\":%s,\"boot\":%u,\"protocol\":%u,"
            "\"character\":\"%s\",\"patchRam\":\"adaptive\",\"ssidBase64\":\"%s\",\"firmware\":\"%s\","

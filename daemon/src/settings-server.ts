@@ -1,3 +1,4 @@
+import {protectedFirmwareMessage} from './firmware-protection.js';
 import {randomBytes, timingSafeEqual} from 'node:crypto';
 import {chmod, mkdir, readFile, rename, writeFile} from 'node:fs/promises';
 import {createServer, type IncomingMessage, type Server, type ServerResponse} from 'node:http';
@@ -265,6 +266,7 @@ export function createSettingsServer(options: SettingsServerOptions): Server {
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'firmware' && segments[1] === 'update') {
       const status = service.status();
+      if (status.firmware.protection?.enabled) throw new HttpError(409, protectedFirmwareMessage);
       if (status.installing || status.firmware.updating || service.installBusy || status.onboarding?.busy)
         throw new HttpError(409, 'Wait for the current installation to finish.');
       if (!status.firmware.canUpdate)
@@ -277,11 +279,14 @@ export function createSettingsServer(options: SettingsServerOptions): Server {
       return json(response, 202, {ok: true});
     }
     if (method === 'POST' && segments.length === 2 && segments[0] === 'firmware' && segments[1] === 'usb') {
-      const body = await readJson(request) as {port?: unknown; confirmed?: unknown; board?: unknown} | null;
+      const body = await readJson(request) as {port?: unknown; confirmed?: unknown; board?: unknown; replacementAcknowledgement?: unknown} | null;
       if (body?.confirmed !== true) throw new HttpError(400, 'Confirm the supported device and firmware replacement first.');
       if (body.port !== undefined && body.port !== null && typeof body.port !== 'string')
         throw new HttpError(400, 'USB port must be a device path.');
       const status = service.status();
+      const protection = status.firmware.protection;
+      if (protection?.enabled && (!protection.confirmation || body.replacementAcknowledgement !== protection.confirmation))
+        throw new HttpError(409, protectedFirmwareMessage);
       if (status.installing || status.firmware.updating || status.firmware.usb.installing || service.installBusy || status.onboarding?.busy)
         throw new HttpError(409, 'Wait for the current installation to finish.');
       if (!status.firmware.usb.flasher)
@@ -289,7 +294,8 @@ export function createSettingsServer(options: SettingsServerOptions): Server {
       if (!status.firmware.usb.release)
         throw new HttpError(409, 'The companion service has no VERSION file, so it cannot choose a release.');
       // Download and write progress, and the result, arrive through /api/events.
-      service.installFirmwareOverUsb(typeof body.port === 'string' ? body.port : undefined, boardChoice(body.board))
+      service.installFirmwareOverUsb(typeof body.port === 'string' ? body.port : undefined, boardChoice(body.board),
+        typeof body.replacementAcknowledgement === 'string' ? body.replacementAcknowledgement : undefined)
         .catch(error => console.error(`[settings] USB firmware install failed: ${error instanceof Error ? error.message : String(error)}`));
       return json(response, 202, {ok: true});
     }

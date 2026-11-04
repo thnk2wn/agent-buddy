@@ -26,7 +26,8 @@ class CharacterEffects {
       CharacterMode mode, AgentBadgeRole role, int index, int count, double seconds);
   // Restore before SpriteRenderer::render; overlay only after its successful render.
   bool restore(uint16_t* frame);
-  bool render(const CharacterState& state, uint16_t* frame);
+  // Compact mode restores decorative effects; its compositor owns badges, text and working trails.
+  bool render(const CharacterState& state, uint16_t* frame, bool compact = false);
   const char* error() const { return error_; }
 
  private:
@@ -59,6 +60,7 @@ class CharacterEffects {
   uint16_t* overlay_ = nullptr;
   OverlayRegion regions_[2][kOverlayBadges] = {};
   uint8_t regionCounts_[2] = {};
+  bool compact_ = false;
   bool captionVisible_ = false;
   bool drawingCaption_ = false;
   int active_ = 0;

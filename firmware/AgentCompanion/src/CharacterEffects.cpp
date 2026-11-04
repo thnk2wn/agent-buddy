@@ -218,7 +218,7 @@ void CharacterEffects::pixel(int x, int y, uint16_t rgb) {
   if (circleDx * circleDx + circleDy * circleDy > (kDisplaySize / 2) * (kDisplaySize / 2)) return;
   // Protect black facial interiors as well as every non-black artwork pixel.
   const int dx = x - kCharacterFrameWidth / 2, dy = y - kDisplaySize / 2;
-  if (int64_t(dx) * dx * 135 * 135 + int64_t(dy) * dy * 160 * 160
+  if ((!compact_ || y >= 145) && int64_t(dx) * dx * 135 * 135 + int64_t(dy) * dy * 160 * 160
       < int64_t(160) * 160 * 135 * 135) return;
   const uint32_t index = y * kCharacterFrameWidth + x;
   if (outputs_[active_][index]) return;
@@ -356,7 +356,7 @@ void CharacterEffects::badge(const AgentBadgeIcon& icon, AgentBadgeRole role, in
 }
 
 AgentBadgesSnapshot CharacterEffects::badgeSnapshot() const {
-  return badges_ ? badges_->snapshot() : AgentBadgesSnapshot{};
+  return badges_ && !compact_ ? badges_->snapshot() : AgentBadgesSnapshot{};
 }
 
 // Draws up to four badges for the agents whose role matches the current mode.
@@ -411,7 +411,8 @@ void CharacterEffects::sleepingZs(double seconds) {
   constexpr int rightXs[] = {228, 253, 281};
   constexpr int leftXs[] = {167, 142, 105};
   constexpr int scales[] = {1, 1, 2};
-  constexpr int bottom = 72, top = -18;
+  // Fit above the compact portrait, inside the compositor's sampled rows.
+  const int bottom = compact_ ? 90 : 72, top = compact_ ? 30 : -18;
   for (int lane = 0; lane < 3; ++lane) {
     const double position = seconds / 3.6 + lane * .31;
     const uint32_t sequence = static_cast<uint32_t>(std::floor(position));
@@ -420,7 +421,7 @@ void CharacterEffects::sleepingZs(double seconds) {
     const double fade = std::min(1.0, edge / .14);
     const int y = bottom - static_cast<int>(std::lround((bottom - top) * phase));
     const bool right = hash(sequence * 13 + lane * 101) & 1;
-    glyph(z, 7, right ? rightXs[lane] : leftXs[lane], y, scales[lane],
+    glyph(z, 7, right ? rightXs[lane] : leftXs[lane], y, compact_ ? 2 : scales[lane],
           color(174, 190, 255, .85 * fade));
   }
 }
@@ -474,7 +475,7 @@ void CharacterEffects::attention(const CharacterState& state) {
   const double breath = .78 + .17 * std::sin(state.effectSeconds * kPi / 2);
   constexpr uint8_t question[] = {14, 17, 1, 2, 4, 0, 4};
   // Above the ear/antenna envelope, with room for the ring inside the round display.
-  constexpr int questionX = 280, questionY = -12;
+  const int questionX = 280, questionY = compact_ ? 60 : -12;
   double ringX = 1, ringY = 0;
   for (int i = 0; i < 32; ++i) {
     dot(questionX + int(std::lround(23 * ringX)), questionY + int(std::lround(23 * ringY)), 1, amber(breath * .3));
@@ -538,7 +539,8 @@ void CharacterEffects::complete(const CharacterState& state) {
   agentBadges(state, badgeSnapshot());
 }
 
-bool CharacterEffects::render(const CharacterState& state, uint16_t* frame) {
+bool CharacterEffects::render(const CharacterState& state, uint16_t* frame, bool compact) {
+  compact_ = compact;
   error_ = nullptr;
   const int index = buffer(frame);
   if (index < 0) return false;
@@ -554,10 +556,10 @@ bool CharacterEffects::render(const CharacterState& state, uint16_t* frame) {
     return false;
   }
   active_ = index;
-  captionVisible_ = badges_ && badges_->usage().count > 0;
+  captionVisible_ = !compact_ && badges_ && badges_->usage().count > 0;
   drawingCaption_ = false;
   const double t = state.effectSeconds;
-  if (state.mode == CharacterMode::Working) working(state);
+  if (state.mode == CharacterMode::Working && !compact_) working(state);
   else if (state.mode == CharacterMode::Sleep) sleepingZs(t);
   else if (state.mode == CharacterMode::Attention) attention(state);
   else if (state.mode == CharacterMode::Complete && t < 3) complete(state);
@@ -569,7 +571,7 @@ bool CharacterEffects::render(const CharacterState& state, uint16_t* frame) {
     spark(362 + int(t * 10), 65 - int(t * 14), 3, rgb);
   }
   drawingCaption_ = true;
-  usageText(state);
+  if (!compact_) usageText(state);
   drawingCaption_ = false;
   return error_ == nullptr;
 }

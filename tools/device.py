@@ -17,7 +17,7 @@ MEMORY_FIELDS = (
 )
 CHARACTER_MODES = ("idle", "surprise", "working", "complete", "attention")
 # Newest firmware command protocol this tool understands; every earlier one stays compatible.
-DEVICE_PROTOCOL = 14
+DEVICE_PROTOCOL = 19
 
 def parse_character_status(line):
     if not line.startswith("CHARACTER "):

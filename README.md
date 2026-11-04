@@ -38,7 +38,8 @@ desktop, with or without the device.
 The opt-in switcher keeps running Claude Code sessions visible even when idle,
 alongside Codex desktop chats observed by the service. Tap captions to browse;
 tap the character to activate the selected Ghostty terminal or Codex chat without
-pinning it. Each tap holds your selection for 12 seconds, then active sessions
+pinning it. Hold the portrait for 750 ms to pin/unpin its session and animation.
+Selecting another session releases the pin. Otherwise each tap holds your selection for 12 seconds, then active sessions
 rotate every 8 seconds. The background service owns
 this behavior; the inspector is optional. See
 [setup and limitations](experiments/session-launch/README.md).
@@ -52,6 +53,7 @@ below do not include these changes.
 - **Readable task context:** agent/status and project captions, followed by long
   conversation titles across word-wrapped pages. An optional slow ticker is also
   available. Missing titles fall back to the project/status.
+- **T3 rename awareness:** when T3 is installed locally, exact provider-session bindings use its current conversation title, including renames. Reads only local title/binding metadata; missing, incompatible, or ambiguous mappings fall back to the provider title. No firmware update is needed.
 - **Local title lookup:** Codex sidebar names and Claude manual or automatic session titles,
   read locally without sending them to a cloud service or substituting prompts
   or tool arguments for titles.
@@ -59,19 +61,37 @@ below do not include these changes.
   and observed Codex desktop chats remain selectable while idle. Tap the title/footer
   to cycle; tap the portrait to activate the selected terminal/chat. Selection stays
   put for 12 seconds after each tap, then follows active work with 8-second rotation
-  across busy sessions and brief completion notices. Without that option, the original activity carousel and
+  across busy sessions and brief completion notices. Hold the portrait to pin/unpin
+  that session (protocol 16): only its own activity changes the character, while
+  other sessions keep live indicators. Switching away releases the pin. Without that option, the original activity carousel and
   pin/unpin behavior remain available. The inspector is optional.
+- **Optional desktop feedback:** Ghostty tabs can retain their current titles with device-matching number prefixes. A brief, nonactivating overlay confirms explicit session activation. Both are independently opt-in; see the [session-launch experiment](experiments/session-launch/README.md#numbered-ghostty-tabs-and-activation-feedback-macos-experiment).
+- **Foreground awareness:** a white monitor identifies the verified foreground Ghostty session. The footer distinguishes **Already open**, **Tap to open**, and **Open session** when focus is unknown, independently of activity and pinning (protocol 18). Codex uses the neutral cue while its app is foreground because the active chat is not verified.
+- **Custom firmware protection:** an opt-in `firmware-protection.json` in the companion data directory protects fork builds across service restarts. Normal update prompts are suppressed; the service rejects stock replacement from stale pages, setup, and direct requests unless explicitly acknowledged in USB recovery. Recovery opt-in is temporary and bound to the current policy, firmware ID, and release version. Malformed protection files fail closed. To retain fork features, merge upstream changes into this fork, build, and use `bash tools/arduino.sh upload-code <port>`. This guard requires the fork’s service; replacing the app/service with an upstream distribution can remove it.
+- **Subtle session-switch feedback:** a softened 90 ms tick acknowledges accepted manual session changes, at most once per 350 ms. Same-session taps, rejected targets, and automatic rotation do not generate ticks. It respects device/desktop mute and volume and yields to activity alerts. Physical playback requires fork firmware protocol 19; macOS background headphone audio supports it too.
+- **Headphone alerts on macOS:** enable **Settings → Desktop → Play sounds** with **Show on desktop** off. The background service plays activity cues through the Mac’s current audio output, even with the desktop app closed as long as the companion service remains running. Desktop and physical speaker volumes remain separate.
+- **Quieter device audio:** firmware settings use 5% volume steps from Off to 100%. The AMOLED 1.75-B/C has a lower minimum output for quiet desk use, with the same maximum. Saved volume percentages survive firmware updates and restarts; the same percentage below 100% now plays softer. This requires this fork’s firmware, not just a desktop app update.
+- **Display protection:** dim after 15 idle minutes, go dark after 60, and stay dark midnight–6 a.m. even during background work. Touch wakes without activating a session; settings are [configurable](docs/screen-protection.md). Requires firmware protocol 15.
 - **Direct session indicators:** protocol 14 shows up to four fixed numbered buttons
-  beside the portrait. Cyan pulses mean working, amber means input is needed, and
+  beside the portrait. Orbiting cyan dots mean working, an amber border and pulsing dot mean input is needed, and
   gray means idle. Tap a number to select and open that session in one action.
   Background work stays visible while you browse an idle session.
+- **Pinned-session alerts:** background work starts, input requests, and completions
+  can play their existing sound cues without changing the pinned portrait (protocol 17).
+  Repeated hooks and automatically reviewed approvals stay quiet; volume/mute still applies.
 - **Compact portraits:** protocol 13 adds a 70% portrait layout for every pack,
   including the stock characters. Agent/status stay above the portrait; a larger
   32-pixel font shows up to three title lines, with the project and session counter
   below. Long titles page every 6.5 seconds. See the
   [layout and character-motion guide](experiments/switcher-layout/README.md).
+- **Compact effects:** completion fireworks/confetti, the attention question mark,
+  floating sleep Zs, and playful reaction sparkles remain visible with the session
+  switcher. Effects stay clear of titles and fixed session targets.
 - **Idle personality:** customizable playful captions appear only after a quiet
-  idle period (60 seconds by default). Active captions identify the agent and status.
+  idle period (60 seconds by default). In the compact switcher they alternate with
+  the project line while the session title stays visible. Background work or input
+  requests suppress them, including sessions beyond the four visible indicators.
+- **Crisp mounted display:** auto-rotation snaps within 5° of a cardinal orientation and stays snapped until 7°, avoiding jagged text from tiny mounting offsets. Deliberate tilts still rotate; manual alignment trim remains available. Session rings smooth both inner and outer edges. Requires this fork’s firmware.
 - **Firmware readability:** a complete Latin alphabet in the existing font, a
   clear caption area, agent badges kept above it, and an attention indicator
   repositioned to avoid the custom characters’ ears and antenna. Caption paging
@@ -516,7 +536,7 @@ without a touch.
 | --- | --- |
 | Wi-Fi status (top) | Shows the connection and network name. Tap it for network details and **Setup Wi-Fi**. |
 | Brightness | Adjusts display brightness |
-| Volume | Sets sound from Off to 100% (default 50%, remembered across restarts) |
+| Volume | Sets sound from Off to 100% in 5% steps (default 50%, remembered across restarts); quieter low levels on AMOLED 1.75-B/C |
 | Character | Shows the installed character |
 | Character state | Previews Idle, Working, Complete, Needs attention, or Surprise |
 
@@ -1186,7 +1206,7 @@ make the sounds softer or louder, for example when music plays, use the
 **Sound volume** slider below **Play sounds** (30% by default). A tick plays at
 the new level when you release the slider. These settings are for the desktop
 app only: the device keeps its own **Volume** in its on-screen menu. The app
-plays no sounds while the character is hidden.
+can keep playing alerts on macOS with **Show on desktop** turned off: the background service plays them through the Mac’s current audio output, including connected headphones, even if the desktop app is closed, provided the companion service remains running. A bundled installation that has never used a physical device may stop that service when quitting; leave the app running in that case. Choose your headphones as the Mac’s output and enable **Play sounds**; its volume slider remains available. Muting stops playback. Turning sounds on or showing/hiding the character does not replay old alerts. Hiding only from the tray does not enable this background mode; use the **Show on desktop** setting. On other platforms, hidden-character playback is unchanged.
 
 It runs on macOS, Windows and Linux. On Hyprland (including Omarchy) it floats,
 pins and un-borders its own window, so there's nothing to configure. On other

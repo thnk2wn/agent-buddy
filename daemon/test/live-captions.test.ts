@@ -192,3 +192,31 @@ test('idle browsing keeps title pages and session count visible instead of playf
  assert.deepEqual(live.lines('idle',snapshot,4000,[],view),['Project roadmap']);
  assert.ok(live.lines('idle',snapshot,60000,[],view)?.length);
 });
+
+test('compact idle phrases retain the title, alternate with project, and yield to any session or subagent',async t=>{
+ const home=await fixture(t),path=join(home,'task-captions.json');
+ await writeFile(path,JSON.stringify({enabled:true,idleMessages:['Ready when you are','All systems cozy'],idleAfterSeconds:60}));
+ const live=new LiveCaptions(path,home,{});
+ const snapshot:PersistedCoordinatorState={version:1,sessions:[1,2,3,4,5].map(i=>({...session(`claude:${i}`),activeUntil:0}))};
+ live.observe({sessionId:'claude:1',projectName:'demo',sessionTitle:'Project roadmap and next steps'});await live.refresh(snapshot);
+ const view={state:'idle' as const,sessionId:'claude:1',pinned:false,index:1,count:5,notice:false,browsing:true};
+ assert.equal(live.compact(view,0,snapshot)?.project,'demo');
+ assert.equal(live.compact(view,59999,snapshot)?.project,'demo');
+ const idle=live.compact(view,60000,snapshot)!;
+ assert.equal(idle.project,'Ready when you are');assert.equal(idle.title,'Project roadmap and next steps');assert.equal(idle.count,5);
+ assert.equal(live.compact(view,65000,snapshot)?.project,'demo');
+ assert.equal(live.compact(view,70000,snapshot)?.project,'All systems cozy');
+ snapshot.sessions[4]!.activeUntil=80000;
+ assert.equal(live.compact(view,71000,snapshot)?.project,'demo');
+ snapshot.sessions[4]!.activeUntil=0;live.compact(view,72000,snapshot);
+ assert.equal(live.compact(view,132000,snapshot)?.project,'Ready when you are');
+ snapshot.sessions[4]!.attentionUntil=200000;
+ assert.equal(live.compact(view,133000,snapshot)?.project,'demo');
+ snapshot.sessions[4]!.attentionUntil=0;live.compact(view,134000,snapshot);
+ snapshot.sessions[4]!.subagents=[{id:'child',leaseUntil:300000,instances:1,lastEventAt:194000}];
+ assert.equal(live.compact(view,194000,snapshot)?.project,'demo');
+ snapshot.sessions[4]!.subagents=[];live.compact(view,195000,snapshot);
+ assert.equal(live.compact({...view,sessionId:'claude:2',index:2},255000,snapshot)?.project,'claude');
+ live.compact(undefined,256000,snapshot);
+ assert.equal(live.compact(view,316000,snapshot)?.project,'demo');
+});

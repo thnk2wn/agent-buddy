@@ -1,3 +1,5 @@
+import {FirmwareProtection, protectedFirmwareMessage, type FirmwareProtectionStatus} from './firmware-protection.js';
+import {desktopHint,type DesktopContext} from './foreground-session.js';
 import type {BrowsableSession} from './session-roster.js';
 import {isAgentId} from './agents/types.js';
 import {SessionFocus, type FocusAction, type SessionView} from './session-focus.js';
@@ -107,6 +109,7 @@ export interface DeviceDetection {
 }
 
 export interface FirmwareStatus {
+  protection?: FirmwareProtectionStatus;
   // What the device runs and what the last `bash tools/arduino.sh build` made (16 hex digits).
   device: string | null;
   built: string | null;
@@ -175,8 +178,9 @@ export interface CompanionStatus extends DaemonStatus {
   desktop: {
     visible: boolean;
     backdrop: DesktopBackdrop;
-    // Whether the desktop app plays sounds; the device keeps its own volume.
+    // Desktop sound opt-in; macOS can play through the service while the app is hidden.
     sounds: boolean;
+    backgroundAudio: boolean;
     // The desktop app's sound volume, 0 to 100.
     volume: number;
     character: string;
@@ -291,13 +295,27 @@ export class CompanionService extends EventEmitter {
   }
 
   get switchableSessions(): readonly BrowsableSession[] {return this.#switchable??[];}
+  #desktopContext:DesktopContext|null=null;
+  setDesktopContext(context:DesktopContext|null):void {this.#desktopContext=context;this.syncUsage();}
+  get presentationSessionIds():string[] {return this.#presentationSnapshot().sessions.map(s=>s.id).sort((a,b)=>a.localeCompare(b));}
   get sessionView(): SessionView | undefined { return this.#view; }
+  #lastSwitchCue = -Infinity;
   focusSession(action: FocusAction): boolean {
     if (!this.#captions.enabled || this.#transport.demoFrame || this.#transport.installing) return false;
+    const previous = this.#view?.sessionId;
     this.#focus.act(action,this.#coordinator.state,this.#presentationSnapshot(),this.#coordinator.drivingSessionIds,Date.now());
     this.syncUsage();
-    return typeof action==='string' || (this.#view?.revision===action.revision && this.#view?.index===action.index);
+    const accepted = typeof action==='string' || (this.#view?.revision===action.revision && this.#view?.index===action.index);
+    const now = Date.now();
+    if (accepted && previous && this.#view?.sessionId && previous !== this.#view.sessionId
+        && now - this.#lastSwitchCue >= 350) {
+      this.#lastSwitchCue = now;
+      this.#transport.notify('switch');
+      this.emit('audio', 'switch');
+    }
+    return accepted;
   }
+  readonly #firmwareProtection: FirmwareProtection;
   readonly #firmwareImage: () => FirmwareImage | null;
   #firmwareUpdating: FirmwareStatus['updating'] = null;
   #lastFirmware: FirmwareStatus['last'] = null;
@@ -337,6 +355,7 @@ export class CompanionService extends EventEmitter {
     this.#transport = transport;
     this.#coordinator = coordinator;
     this.#agentContext = agentContext;
+    this.#firmwareProtection = new FirmwareProtection(join(agentContext.dataDir, 'firmware-protection.json'));
     this.#captions = new LiveCaptions(join(agentContext.dataDir, 'task-captions.json'), agentContext.home, agentContext.env);
     this.#badgeIcons = badgeIcons;
     this.#characterBuilder = characterBuilder;
@@ -410,12 +429,18 @@ export class CompanionService extends EventEmitter {
     if (this.#handlingHook || this.stopping) return;
     this.#view = this.#captions.enabled ? this.#focus.frame(this.#coordinator.state, this.#presentationSnapshot(),
       this.#coordinator.drivingSessionIds, Date.now()) : undefined;
+    if(this.#view?.browsing&&this.#view.sessionId) {
+      this.#view.desktop=desktopHint(this.#desktopContext,this.presentationSessionIds,this.#view.sessionId,Date.now());
+    }
     const state = this.#view?.state ?? this.#coordinator.state;
-    if (!this.#transport.demoFrame && this.#transport.state !== state) this.#transport.setState(state);
+    if (!this.#transport.demoFrame && this.#transport.state !== state) {
+      this.#transport.setState(state);
+      this.emit('audio', state);
+    }
     const key = JSON.stringify(this.#view);
     if (key !== this.#viewKey) {this.#viewKey=key; this.syncBadges(); this.emit('change');}
     this.#transport.setUsage(this.#deviceUsageLines());
-    this.#transport.setCompact(this.#captions.compact(this.#view));
+    this.#transport.setCompact(this.#captions.compact(this.#view, Date.now(), this.#presentationSnapshot()));
   }
 
   #deviceUsageLines(): string[] {
@@ -475,6 +500,7 @@ export class CompanionService extends EventEmitter {
         visible: this.#display.showDesktopCompanion,
         backdrop: this.#display.desktopBackdrop,
         sounds: this.#display.desktopSounds,
+        backgroundAudio: process.platform === 'darwin',
         volume: this.#display.desktopVolume,
         character: this.desktopCharacter(),
         pack: desktopPackPath(this.desktopCharacter()),
@@ -526,7 +552,9 @@ export class CompanionService extends EventEmitter {
   handleHook(agent: AgentId, event: HookEvent, payload: HookPayload): boolean {
     if (!isAgentEnabled(agent, true)) return false;
     const namespaced = namespaceAgentPayload(agent, payload);
-    const ending=event==='agentStop'||event==='subagentStop' ? this.#coordinator.snapshot().sessions : [];
+    const prior=this.#coordinator.snapshot().sessions;
+    const ending=event==='agentStop'||event==='subagentStop' ? prior : [];
+    const completed:string[]=[];
     this.#handlingHook = true;
     let accepted: boolean;
     try {accepted = this.#coordinator.handle(event, namespaced);} finally {this.#handlingHook = false;}
@@ -544,13 +572,26 @@ export class CompanionService extends EventEmitter {
           const pending=this.#coordinator.acknowledgeCompletion(session.id);
           const pulsing=this.#switchable!==null && this.#coordinator.state==='complete'
             && this.#coordinator.drivingSessionIds.includes(session.id);
-          if(pending || pulsing)this.#focus.completed(session.id,now);
+          if(pending || pulsing) {this.#focus.completed(session.id,now);completed.push(session.id);}
         }
       }
     }
     if (accepted) {
       if (payload.automaticApproval !== true) this.#captions.observe(namespaceAgentPayload(agent, payload), event);
       this.syncUsage();
+      // Pinning controls the portrait, not background notifications. Use genuine
+      // per-session transitions, never rotation, title refreshes or duplicate hooks.
+      if(this.#view?.pinned && payload.automaticApproval!==true) {
+        const now=Date.now();
+        const busy=(s:typeof prior[number]|undefined)=>!!s&&(s.activeUntil>now||s.subagents.some(a=>a.leaseUntil>now));
+        for(const session of this.#coordinator.snapshot().sessions) {
+          if(session.id===this.#view.sessionId)continue;
+          const before=prior.find(s=>s.id===session.id);
+          if(session.attentionUntil>now && !(before && before.attentionUntil>now))this.#notifyAudio('attention');
+          else if(completed.includes(session.id))this.#notifyAudio('complete');
+          else if(busy(session) && !busy(before))this.#notifyAudio('working');
+        }
+      }
       if (!this.#lastAgentEvents.has(agent))
         void markAgentSeen(agent).catch(error => console.error(`[agents] ${error instanceof Error ? error.message : String(error)}`));
       this.#lastAgentEvents.set(agent, Date.now());
@@ -692,6 +733,16 @@ export class CompanionService extends EventEmitter {
       await saveDisplaySettings(this.#display);
     }
     this.emit('change');
+  }
+
+  #notifyAudio(cue: 'working'|'attention'|'complete'): void {
+    this.#transport.notify(cue);
+    this.emit('audio', cue);
+  }
+
+  get desktopAudio() {
+    return {sounds: this.#display.desktopSounds && !this.stopping && !this.#installBusy && !this.#transport.installing && !this.#transport.demoFrame,
+      visible: this.#display.showDesktopCompanion, volume: this.#display.desktopVolume};
   }
 
   get deviceEnabled(): boolean {
@@ -1240,8 +1291,9 @@ export class CompanionService extends EventEmitter {
       device,
       built,
       board,
+      protection: this.#firmwareProtection.status(device, this.#service.version),
       // The built firmware is the default board's, which is the release board.
-      canUpdate: !this.#firmwareUpdating && !this.#installBusy && !this.#usbInstalling && built !== null && device !== null
+      canUpdate: !this.#firmwareProtection.status(device, this.#service.version).enabled && !this.#firmwareUpdating && !this.#installBusy && !this.#usbInstalling && built !== null && device !== null
         && built !== device && this.#transport.firmwareOverWifi === true && board === releaseBoard,
       updating: this.#firmwareUpdating,
       last: this.#lastFirmware,
@@ -1268,10 +1320,10 @@ export class CompanionService extends EventEmitter {
   // Downloads this service's release firmware from GitHub and has the desktop app write it over
   // USB: bootloader, partition table, app and the Copilot character. Wi-Fi settings stay. The
   // device then gets its previous character back, so an update does not reset the character.
-  installFirmwareOverUsb(selectedPort?: string | null, board?: string | null): Promise<void> {
+  installFirmwareOverUsb(selectedPort?: string | null, board?: string | null, replacementAcknowledgement?: string): Promise<void> {
     return this.#mutate(async () => {
       const character = this.#transport.character ?? this.#characterPreference;
-      await this.#installFirmwareOverUsb(selectedPort, board);
+      await this.#installFirmwareOverUsb(selectedPort, board, replacementAcknowledgement);
       await this.#restoreCharacterAfterFirmware(character);
     }, null, 'the firmware install');
   }
@@ -1317,7 +1369,8 @@ export class CompanionService extends EventEmitter {
     return this.#transport.matchesUsbPort(port) ? this.#transport.board : null;
   }
 
-  async #installFirmwareOverUsb(selectedPort?: string | null, chosenBoard?: string | null): Promise<void> {
+  async #installFirmwareOverUsb(selectedPort?: string | null, chosenBoard?: string | null, replacementAcknowledgement?: string): Promise<void> {
+    this.#firmwareProtection.assertReplacement(this.#transport.firmware, this.#service.version, replacementAcknowledgement);
     this.#pendingRestore = null;
     const version = this.#service.version;
     if (!version) throw new Error('The companion service has no VERSION file, so it cannot choose a release.');
@@ -1352,12 +1405,19 @@ export class CompanionService extends EventEmitter {
       if (target.serialNumber && target.serialNumber !== port.serialNumber)
         throw new Error('The selected USB device changed during the download. Detect and confirm the device again.');
       chooseFirmwareBoard(this.#reportedUsbBoard(port), chosen);
+      const confirmedFirmware = this.#transport.firmware;
+      this.#firmwareProtection.assertReplacement(confirmedFirmware, version, replacementAcknowledgement);
       await this.#transport.selectUsbPort(port.path);
       console.log(`[firmware] installing release v${version} ${chosen} (${release.id}) over USB on ${port.path}`);
-      await this.#transport.withUsbReleased(() => this.#usbInstaller.flash(program, release.dir, port, {
-        stage: stage => set({stage, percent: stage === 'writing' ? 0 : null}),
-        progress: percent => set({stage: 'writing', percent}),
-      }, chosen));
+      await this.#transport.withUsbReleased(() => {
+        // Releasing USB awaits I/O and clears the live firmware identity. Recheck
+        // the policy at the last moment using the identity validated above.
+        this.#firmwareProtection.assertReplacement(confirmedFirmware, version, replacementAcknowledgement);
+        return this.#usbInstaller.flash(program, release.dir, port, {
+          stage: stage => set({stage, percent: stage === 'writing' ? 0 : null}),
+          progress: percent => set({stage: 'writing', percent}),
+        }, chosen);
+      });
       console.log(`[firmware] installed release v${version} over USB; the device restarts`);
       this.#lastUsbFirmware = {ok: true, version, board, id, at: Date.now()};
     } catch (error) {
@@ -1379,6 +1439,8 @@ export class CompanionService extends EventEmitter {
   }
 
   async #updateFirmware(): Promise<void> {
+    if (this.#firmwareProtection.status(this.#transport.firmware, this.#service.version).enabled)
+      throw new Error(protectedFirmwareMessage + ' Install reviewed fork builds with upload-code.');
     const image = this.#firmwareImage();
     if (!image) throw new Error('No firmware is built. Run: bash tools/arduino.sh build');
     if (image.id === this.#transport.firmware) throw new Error('The device already runs this firmware.');

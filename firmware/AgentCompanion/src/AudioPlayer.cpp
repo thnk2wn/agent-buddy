@@ -12,11 +12,13 @@ namespace {
 struct AudioAsset {
   const int16_t* samples;
   uint32_t count;
+  uint8_t gainPercent = 100;
 };
 
 QueueHandle_t cueQueue = nullptr;
 std::atomic<uint8_t> currentVolume{kDefaultSoundVolume};
 std::atomic<bool> ready{false};
+std::atomic<bool> playing{false};
 
 AudioAsset assetForCue(AudioCue cue) {
   switch (cue) {
@@ -28,6 +30,8 @@ AudioAsset assetForCue(AudioCue cue) {
       return {kAudioComplete, kAudioCompleteSamples};
     case AudioCue::Surprise:
       return {kAudioSurprise, kAudioSurpriseSamples};
+    case AudioCue::SessionSwitch:
+      return {kAudioSettings, kAudioSettingsSamples, 45};
     case AudioCue::Settings:
       return {kAudioSettings, kAudioSettingsSamples};
   }
@@ -52,14 +56,18 @@ bool playCue(AudioCue cue, AudioCue& replacement) {
   for (uint32_t offset = 0; offset < asset.count; offset += kChunkFrames) {
     if (soundVolume() == 0) break;
     if (xQueueReceive(cueQueue, &replacement, 0) == pdTRUE) {
-      interrupted = true;
-      break;
+      // A tick queued just as an alert began must not interrupt that alert.
+      if (replacement != AudioCue::SessionSwitch || cue == AudioCue::SessionSwitch) {
+        interrupted = true;
+        break;
+      }
     }
     const size_t frames =
         min(static_cast<uint32_t>(kChunkFrames), asset.count - offset);
     for (size_t frame = 0; frame < frames; ++frame) {
-      stereo[frame * 2] = asset.samples[offset + frame];
-      stereo[frame * 2 + 1] = asset.samples[offset + frame];
+      const int16_t sample = int32_t(asset.samples[offset + frame]) * asset.gainPercent / 100;
+      stereo[frame * 2] = sample;
+      stereo[frame * 2 + 1] = sample;
     }
     if (!output.write(reinterpret_cast<const uint8_t*>(stereo), frames * 4)) {
       Serial.println("AUDIO error=i2s-write");
@@ -86,8 +94,10 @@ void audioTask(void*) {
   AudioCue cue;
   while (true) {
     if (xQueueReceive(cueQueue, &cue, portMAX_DELAY) != pdTRUE) continue;
+    playing.store(true);
     AudioCue replacement = cue;
     while (!playCue(cue, replacement)) cue = replacement;
+    playing.store(false);
   }
 }
 }
@@ -124,6 +134,11 @@ uint8_t soundVolume() {
 
 bool queueAudioCue(AudioCue cue) {
   if (!cueQueue || soundVolume() == 0) return false;
+  // Navigation feedback is lower priority than work/input/completion alerts.
+  if (cue == AudioCue::SessionSwitch) {
+    if (playing.load()) return false;
+    return xQueueSend(cueQueue, &cue, 0) == pdPASS;
+  }
   return xQueueOverwrite(cueQueue, &cue) == pdPASS;
 }
 }

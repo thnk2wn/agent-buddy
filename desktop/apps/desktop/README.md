@@ -44,7 +44,7 @@ bundled into the page) when the mode the engine shows changes, as the firmware
 does. The companion service keeps the setting (`desktopSounds`, off by
 default), so the button and the **Play sounds** switch in Settings agree. The
 **Sound volume** slider in Settings sets the cue gain (`desktopVolume`, 0 to
-100, 30 by default); the page plays a tick when the volume changes.
+100, 30 by default); the page plays a tick when the volume changes. On macOS, when **Show on desktop** is off, the daemon instead plays new activity cues with the native system audio player. This works with the app closed while the companion service remains running and follows the Mac’s current output; it does not depend on a running or audible webview. Tray-only hiding does not select this mode. The existing quit policy can stop the bundled service on installations that have never used a physical device; keep the app running in that case.
 
 **Return from the Dock or taskbar.** The running app has an entry in the
 macOS Dock or the taskbar on Windows and supported Linux desktops.

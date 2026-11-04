@@ -1,3 +1,8 @@
+import {DesktopAudio, macAudioPlayer} from './desktop-audio.js';
+import {ForegroundReader} from './foreground-session.js';
+import {SessionVisuals} from './session-visuals.js';
+import {SessionOverlay} from './session-overlay.js';
+import {loadScreenProtection,screenProtectionPacket} from './screen-protection.js';
 import {isFocusAction} from './session-focus.js';
 import {localSessionRoster, type SessionRoster} from './session-roster.js';
 import {deviceSessionAction} from './device-session-actions.js';
@@ -11,7 +16,7 @@ import {chmod, mkdir, rm, unlink} from 'node:fs/promises';
 import {createConnection, createServer, type Socket} from 'node:net';
 import {dirname, join} from 'node:path';
 import {characterStates, hookEvents, type DaemonRequest} from './protocol.js';
-import {isNamedPipe, serviceStoppedPath, socketPath, statePath} from './paths.js';
+import {isNamedPipe, serviceInfo, serviceStoppedPath, socketPath, statePath} from './paths.js';
 import {StateCoordinator} from './state-coordinator.js';
 import {StateStore} from './state-store.js';
 import {DeviceTransport} from './device-transport.js';
@@ -28,6 +33,7 @@ const autoInstallRetryMs = 5 * 60 * 1000;
 
 export async function runDaemon(): Promise<void> {
   let lastAutoInstall = 0;
+  let syncScreenProtection=()=>{};
   let service: CompanionService | undefined;
   let launcher: SessionLauncher | undefined;
   // A device that lost its pack (for example, an interrupted install) gets the preferred one back.
@@ -54,11 +60,20 @@ export async function runDaemon(): Promise<void> {
   launcher = new SessionLauncher(join(agentContext.dataDir,'session-launch.json'),
     ()=>liveClaudeSessions(agentContext.home,agentContext.env),[ghostty],process.platform==='darwin',session=>titleProbe.discover(session));
   await launcher.load();
+  const overlay=new SessionOverlay();
+  const visuals=new SessionVisuals(join(agentContext.dataDir,'session-visuals.json'),ghostty,text=>overlay.show(text),()=>overlay.hide());
+  await visuals.load();launcher.visuals=visuals;
+  launcher.onActivated=async id=>{
+    if(!visuals.status().overlay)return;
+    const ids=service?.presentationSessionIds??[];
+    const titles=await activityTitles.resolve(ids);
+    if(launcher?.status().enabled&&service?.sessionView?.browsing)await visuals.activated(service.presentationSessionIds.indexOf(id)+1,titles[id]?.title||titles[id]?.project||'Session');
+  };
   agentContext.locations = otherAgentLocations(agentContext);
   const badgeIcons = await loadAgentBadgeIcons(agentContext.dataDir);
-  const demo = new DeviceDemo(frame => transport.setDemo(frame), badgeIcons);
+  const demo = new DeviceDemo(frame => {transport.setDemo(frame);syncScreenProtection();}, badgeIcons);
   // While the service stops on request, the device stays idle.
-  const coordinator = new StateCoordinator(state => { if (service) service.syncUsage(); else transport.setState(state); }, {
+  const coordinator = new StateCoordinator(state => { syncScreenProtection(); if (service) service.syncUsage(); else transport.setState(state); }, {
     restored,
     onEvent: event => history.add(event),
     onMutation: state => {
@@ -67,7 +82,24 @@ export async function runDaemon(): Promise<void> {
       service?.syncUsage();
     },
   });
+  const screenConfig=await loadScreenProtection(join(agentContext.dataDir,'screen-protection.json'));
+  syncScreenProtection=()=>{
+    const demoing=!!transport.demoFrame;
+    transport.setScreenProtection(screenProtectionPacket(demoing?{...screenConfig,quietStartHour:0,quietEndHour:0}:screenConfig,
+      demoing?'working':coordinator.state));
+  };
+  const screenTimer=setInterval(syncScreenProtection,10000);screenTimer.unref();
+  syncScreenProtection();
   service = new CompanionService(transport, coordinator, agentContext, badgeIcons);
+  let desktopAudioReady = false;
+  const desktopAudio = new DesktopAudio(macAudioPlayer(join(serviceInfo().root, 'assets', 'audio')));
+  const syncDesktopAudio = () => {
+    const settings = service!.desktopAudio;
+    desktopAudio.configure(desktopAudioReady && settings.sounds, settings.visible, settings.volume);
+  };
+  syncDesktopAudio();
+  service.on('change', syncDesktopAudio);
+  service.on('audio', (cue: string) => {syncDesktopAudio(); desktopAudio.play(cue);});
   const roster=localSessionRoster(join(agentContext.dataDir,'session-roster.json'),agentContext.home,agentContext.env);
   await roster.load(restored?.sessions.map(s=>s.id)??[]);
   let rosterRefreshing=false;
@@ -85,6 +117,32 @@ export async function runDaemon(): Promise<void> {
   };
   await refreshRoster();
   const rosterTimer=setInterval(()=>void refreshRoster(),5000);rosterTimer.unref();
+  let visualRefreshing=false,visualStopping=false;
+  const refreshVisuals=async()=>{
+    if(visualRefreshing||visualStopping)return;visualRefreshing=true;
+    try {
+      const ids=service?.sessionView?.browsing&&!demo.status().active&&!transport.installing?service.presentationSessionIds:[];
+      const targets=visuals.status().labels?await launcher!.numberedTargets(ids):[];
+      await visuals.reconcile(targets,()=>!visualStopping&&!!launcher?.status().enabled);
+    } catch(error){console.error('[session-visuals]',error instanceof Error?error.message:String(error));}
+    finally{visualRefreshing=false;}
+  };
+  const visualTimer=setInterval(()=>void refreshVisuals(),2000);visualTimer.unref();
+  const foreground=new ForegroundReader();let foregroundBusy=false;
+  const refreshForeground=async()=>{
+    if(foregroundBusy||visualStopping)return;foregroundBusy=true;
+    try {
+      if(process.platform!=='darwin'||!launcher!.status().enabled||demo.status().active||transport.installing) {
+        service!.setDesktopContext(null);return;
+      }
+      // Timestamp before the read: slow/stalled automation may not renew stale evidence.
+      const at=Date.now(),observed=await foreground.read();
+      const context=await launcher!.desktopContext(observed,service!.presentationSessionIds,at);
+      if(!visualStopping&&launcher!.status().enabled)service!.setDesktopContext(context);
+    } catch {service!.setDesktopContext({at:Date.now(),current:null,other:[]});}
+    finally {foregroundBusy=false;}
+  };
+  const foregroundTimer=setInterval(()=>void refreshForeground(),1000);foregroundTimer.unref();
   // Picks up characters added or changed since the last run before anyone opens the settings page.
   void service.refreshCharacterPacks();
   await service.refreshWifiPairing();
@@ -117,11 +175,21 @@ export async function runDaemon(): Promise<void> {
   const setup = service.onboardingStatus();
   const preparingUsb = !setup.completed && setup.port && setup.display !== 'desktop' && !setup.deviceDeferred;
   await transport.start(preparingUsb ? 'auto' : connectionMode, service.deviceEnabled, preparingUsb ? setup.port : null);
+  desktopAudioReady = true;
+  syncDesktopAudio();
   console.log(`[daemon] listening ${path}`);
   settingsUrl = await startSettingsServer(companion);
 
   const shutdown = async () => {
+    desktopAudio.close();
+    service!.off('change', syncDesktopAudio);
+    service!.removeAllListeners('audio');
+    visualStopping=true;
+    clearInterval(foregroundTimer);
+    clearInterval(visualTimer);
+    await visuals.restore().catch(()=>{});
     clearInterval(rosterTimer);
+    clearInterval(screenTimer);
     demo.close();
     companion.stopUsage();
     coordinator.close();

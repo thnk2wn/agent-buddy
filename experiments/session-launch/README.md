@@ -133,3 +133,75 @@ terminals with running fixture commands caused blocking confirmation dialogs.
 References:
 - https://ghostty.org/docs/features/applescript
 - https://github.com/ghostty-org/ghostty/blob/v1.3.1/src/termio/stream_handler.zig
+
+## Numbered Ghostty tabs and activation feedback (macOS experiment)
+
+The service can prefix paired Ghostty tabs with the **same session numbers as the
+full device roster**, including gaps for Codex chats. It uses the existing tab
+text (including Claude's status symbols), never a project-name replacement.
+Underlying terminal titles are untouched. Automatic titles are polled every two
+seconds; custom tab titles retain their wording. No terminal input, new windows,
+modal title prompts, or inspector process is involved.
+
+```sh
+npm run build --prefix daemon
+sh tools/build-session-overlay.sh   # optional macOS helper; needs Xcode command-line tools
+npm run session-launch -- labels-enable
+npm run session-launch -- overlay-enable
+npm run session-launch -- status
+# Disable independently:
+npm run session-launch -- labels-disable
+npm run session-launch -- overlay-disable
+```
+
+These commands configure the **running daemon**, so install the compiled daemon
+modules first when developing locally. The overlay binary must sit next to the
+installed `session-overlay.js` as `session-overlay-macos`. Without it, activation
+still works and visual status reports the missing overlay. Stock releases do not
+include this experiment. Build the helper again for the target Mac architecture.
+
+The optional two-second, click-through overlay appears near the top of the screen
+containing the pointer after a successful explicit activation. It does not take
+keyboard focus, ask for notification permission, or appear during auto-rotation.
+Rapid activations replace the prior overlay. Pinning alone does not activate it.
+
+`session-visuals.json` in the service data directory stores the opt-ins and an
+owner-only write-ahead journal. Disable removes only labels the service still
+owns; newer manual renames are preserved. A clean service stop removes prefixes;
+a restart restores numbering. If the service is killed, its next run uses the
+journal to recover. Do not delete that file while owned prefixes are visible.
+
+Ghostty implements the prefix as a tab-label override, while the underlying
+terminal title keeps updating. A tab name different from its surface title is
+preserved as a custom name; Ghostty's API does not distinguish a custom override
+whose text is identical to the surface title, so equal names are treated as
+automatic. Only single-terminal tabs with one unambiguous live pairing are
+labeled. Splits, ambiguous pairings, unpaired/closed sessions, and temporary
+pairing-probe titles are skipped. If a split is added to a labeled tab, automatic
+cleanup waits until it is a single-terminal tab again rather than guessing.
+Numbers can change as the device roster changes; they are session numbers, not
+Ghostty's native tab positions.
+
+## Foreground awareness (protocol 18)
+
+A small white monitor below a numbered indicator identifies the session currently
+focused on the Mac, independently of which session the device is following. The
+footer says **Already open**, **Tap to open**, or neutral **Open session** when the
+foreground session cannot be verified. Existing colors still describe activity;
+foreground observation never activates a window, pins a session, changes work
+state, or triggers audio. Taps keep their existing behavior.
+
+This runs in the background daemon while session launching is enabled. Once per
+second, macOS supplies the foreground application and Ghostty supplies its exact
+front window, selected tab, and focused terminal UUID. A current live-process
+pairing is required; titles, directories, and last activation are never evidence.
+Split panes use the focused surface, not the tab name. Automation failure,
+ambiguous pairings, stale PID identities, and missing metadata become unknown.
+
+Codex chats currently use neutral **Open session** while Codex is foreground:
+there is no verified current-chat signal in this adapter. When another app is
+foreground, a launchable Codex chat can correctly say **Tap to open**. Other
+unsupported hosts also remain neutral. Polling requires no new hooks or inspector.
+Foreground evidence expires after 3.5 seconds in the daemon and the device clears
+a stale monitor/cue after four seconds without a new observation stamp. Protocol
+17 and older firmware receive their original metadata without these fields.

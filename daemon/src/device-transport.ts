@@ -1,3 +1,5 @@
+import {randomInt} from 'node:crypto';
+import {SessionInputReceipts} from './session-input.js';
 import type {CompactCaption} from './compact-caption.js';
 import type {FocusAction} from './session-focus.js';
 import type {DemoFrame} from './device-demo.js';
@@ -171,6 +173,20 @@ export class DeviceTransport {
     else this.#wifi.setUsage(this.#usage);
   }
 
+  #notificationId=randomInt(1,0xffffffff);
+  notify(cue:'working'|'attention'|'complete'|'switch'):void {
+    if(this.#demo || this.#installing || !this.#enabled || !this.connected)return;
+    this.#notificationId=this.#notificationId%0xffffffff+1;
+    const packet=`+${this.#notificationId}|${cue}\n`;
+    const expires=cue==='switch'?Date.now()+350:Infinity;
+    (this.#usb.connected?this.#usb:this.#wifi).notify(packet,()=>!this.#demo&&!this.#installing&&this.#enabled&&Date.now()<expires,cue==='switch'?19:17);
+  }
+
+  setScreenProtection(packet:string):void {
+    if(this.#installing || !this.#enabled)return;
+    (this.#usb.connected?this.#usb:this.#wifi).setScreenProtection(packet);
+  }
+
   setCompact(caption: CompactCaption | null):void {
     this.#compact=caption;
     if(this.#demo || this.#installing || !this.#enabled)return;
@@ -272,7 +288,9 @@ export class DeviceTransport {
     }
   }
 
+  readonly #inputReceipts=new SessionInputReceipts();
   #focused(action: FocusAction): void {
+    if(!this.#inputReceipts.accept(action))return;
     if (!this.#demo && !this.#installing && this.#enabled) this.#focus(action);
   }
 

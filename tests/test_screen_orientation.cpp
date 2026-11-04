@@ -60,16 +60,16 @@ int main() {
   copilot::DisplayOrientation display;
   assert(!display.update(degree));
   assert(display.angle() == 0.0f);
-  assert(!display.update(1.4f * degree));
-  assert(display.update(1.6f * degree));
-  assert(near(display.angle(), 1.6f * degree));
+  assert(!display.update(6.9f * degree));
+  assert(display.update(7.1f * degree));
+  assert(near(display.angle(), 7.1f * degree));
   assert(display.update(0.3f * degree));
   assert(display.angle() == 0.0f);
   for (float cardinal : {copilot::kOrientationPi / 2, copilot::kOrientationPi,
                          -copilot::kOrientationPi / 2, 0.0f}) {
-    display.update(cardinal + 0.3f * degree);
+    display.update(cardinal - 4.0f * degree);
     assert(std::fabs(copilot::ScreenOrientation::shortestAngle(display.angle() - cardinal)) < 0.00001f);
-    assert(!display.update(cardinal - 1.2f * degree));
+    assert(!display.update(cardinal - 6.5f * degree));
     assert(std::fabs(copilot::ScreenOrientation::shortestAngle(display.angle() - cardinal)) < 0.00001f);
   }
 
@@ -85,10 +85,10 @@ int main() {
   copilot::TouchGesture gesture;
   assert(copilot::ScreenOrientation::panelToContent(
       copilot::kOrientationPi / 2, 466, 100, 233, x, y));
-  assert(!touch.sample(true, x, y, 1, gesture));
+  assert(touch.sample(true, x, y, 1, gesture));
   assert(copilot::ScreenOrientation::panelToContent(
       copilot::kOrientationPi / 2, 466, 200, 233, x, y));
-  assert(!touch.sample(true, x, y, 100, gesture));
+  assert(touch.sample(true, x, y, 100, gesture));
   assert(touch.sample(false, 0, 0, 200, gesture));
   assert(gesture.kind == copilot::TouchGestureKind::SwipeUp);
 

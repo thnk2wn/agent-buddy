@@ -197,7 +197,7 @@ int main() {
     if (renderedCharacters[frameIndex] != character)
       std::memset(frame, 0, first.size() * sizeof(uint16_t));
     const bool rendered = sprite.render(state, frame);
-    if (!restored || !rendered || (!compactPreview && !effects.render(state, frame))) {
+    if (!restored || !rendered || !effects.render(state, frame, compactPreview)) {
       const char* renderError = sprite.error();
       std::cout << "ERR " << (effects.error() ? effects.error() : renderError) << '\n' << std::flush;
       continue;

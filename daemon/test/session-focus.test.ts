@@ -135,3 +135,71 @@ test('fixed indicators page in groups of four and preserve each session number',
  const next=f.act({index:5,revision:v.revision!},'idle',s,[],1);
  assert.deepEqual(next.targets?.map(t=>t.index),[5,6]);assert.equal(next.index,5);assert.equal(next.count,6);
 });
+
+
+test('persistent pin isolates portrait state while background indicators remain live',()=>{
+ const f=new SessionFocus();f.setBrowseAll(true);const s=fixture();
+ s.sessions[0]!.activeUntil=0;
+ const v=f.frame('working',s,[],0);
+ let p=f.act({index:1,revision:v.revision!,pin:true},'working',s,[],1);
+ assert.equal(p.pinned,true);assert.equal(p.state,'idle');assert.equal(p.sessionId,'claude:a');
+ const original=structuredClone(s);
+ f.setBrowseAll(true); // Discovery refresh must not release an existing pin.
+ f.prompt('codex:b');s.sessions[1]!.attentionUntil=200000;
+ p=f.frame('attention',s,[],20000);
+ assert.equal(p.sessionId,'claude:a');assert.equal(p.state,'idle');assert.equal(p.targets?.[1]?.state,'a');
+ s.sessions[1]!.attentionUntil=0;s.sessions[1]!.activeUntil=0;f.completed('codex:b',20001);
+ p=f.frame('complete',s,['codex:b'],20002);assert.equal(p.state,'idle');assert.equal(p.notice,false);
+ s.sessions[0]!.activeUntil=30000;
+ p=f.frame('working',s,[],21000);assert.equal(p.state,'working');assert.equal(p.pinned,true);
+ s.sessions[0]!.attentionUntil=30000;
+ assert.equal(f.frame('attention',s,[],22000).state,'attention');
+ s.sessions[0]!.attentionUntil=0;s.sessions[0]!.activeUntil=0;f.completed('claude:a',23000);
+ assert.equal(f.frame('complete',s,[],23001).state,'complete');
+ assert.equal(f.frame('idle',s,[],31001).state,'idle');
+ assert.equal(f.frame('working',s,[],200000).pinned,true);
+ assert.equal(f.act({index:1,revision:v.revision!,activate:true},'idle',s,[],200001).pinned,true);
+ assert.equal(f.act({index:1,revision:v.revision!,pin:true},'idle',s,[],200002).pinned,false);
+ // Pinning is presentation-only, never extends the selected work lease.
+ assert.equal(original.sessions[0]!.activeUntil,0);assert.equal(s.sessions[0]!.activeUntil,0);
+});
+test('switching away releases pin, closed sessions clear it, and stale holds are rejected',()=>{
+ const f=new SessionFocus();f.setBrowseAll(true);const s=fixture();
+ const v=f.frame('working',s,[],0);
+ f.act({index:1,revision:v.revision!,pin:true},'working',s,[],1);
+ assert.equal(f.act({index:2,revision:v.revision!,activate:true},'working',s,[],2).pinned,false);
+ f.act({index:2,revision:v.revision!,pin:true},'working',s,[],3);
+ assert.equal(f.act('next','working',s,[],4).pinned,false);
+ f.act({index:1,revision:v.revision!,pin:true},'working',s,[],5);
+ s.sessions.shift();
+ const remaining=f.frame('working',s,[],6);assert.equal(remaining.pinned,false);assert.equal(remaining.sessionId,'codex:b');
+ assert.equal(f.act({index:1,revision:v.revision!,pin:true},'working',s,[],7).pinned,false);
+ assert.deepEqual(parseFocusLine('TOUCH select=1 revision=7 presses=1 activate=0 pin=1'),{index:1,revision:7,pin:true});
+ assert.equal(parseFocusLine('TOUCH select=1 revision=7 presses=1 activate=1 pin=1'),null);
+});
+
+test('background completion indicator lasts ten seconds and yields immediately to new work/input',()=>{
+ const f=new SessionFocus();f.setBrowseAll(true);const s=fixture();s.sessions[0]!.activeUntil=0;
+ const v=f.frame('working',s,[],0);f.act({index:1,revision:v.revision!,pin:true},'working',s,[],1);
+ s.sessions[1]!.activeUntil=0;f.completed('codex:b',100);
+ assert.equal(f.frame('complete',s,[],101).targets?.[1]?.state,'c');
+ assert.equal(f.frame('complete',s,[],101).state,'idle');
+ assert.equal(f.frame('idle',s,[],10099).targets?.[1]?.state,'c');
+ assert.equal(f.frame('idle',s,[],10100).targets?.[1]?.state,'i');
+ s.sessions[1]!.activeUntil=50000;assert.equal(f.frame('working',s,[],10200).targets?.[1]?.state,'w');
+ s.sessions[1]!.activeUntil=0;f.completed('codex:b',10300);
+ assert.equal(f.frame('complete',s,[],10301).targets?.[1]?.state,'c');
+ s.sessions[1]!.attentionUntil=50000;
+ assert.equal(f.frame('attention',s,[],10302).targets?.[1]?.state,'a');
+ s.sessions[1]!.attentionUntil=0;assert.equal(f.frame('idle',s,[],10303).targets?.[1]?.state,'i');
+});
+
+test('finishing again during a manual browse refreshes the green indicator',()=>{
+ const f=new SessionFocus();f.setBrowseAll(true);const s=fixture();
+ const v=f.frame('working',s,[],0);f.act('activate','working',s,[],1);
+ s.sessions[0]!.activeUntil=0;f.completed('claude:a',2);
+ assert.equal(f.frame('working',s,[],3).targets?.[0]?.state,'c');
+ s.sessions[0]!.activeUntil=100000;assert.equal(f.frame('working',s,[],4).targets?.[0]?.state,'w');
+ s.sessions[0]!.activeUntil=0;f.completed('claude:a',5);
+ assert.equal(f.frame('working',s,[],6).targets?.[0]?.state,'c');
+});

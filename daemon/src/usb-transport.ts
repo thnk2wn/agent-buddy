@@ -30,7 +30,7 @@ import {
 
 const networkRefreshMs = 5000;
 // The newest firmware protocol this daemon knows; see kDeviceProtocol in DeviceCommands.h.
-const maxProtocol = 14;
+const maxProtocol = 19;
 // Requests in a row without an answer before the port counts as dead. A device that restarts
 // can leave the old port open but silent; closing it lets discovery or Wi-Fi take over.
 const deadLinkTimeouts = 3;
@@ -81,6 +81,10 @@ export class UsbTransport {
   // What the device shows now; null until it is sent after a connect or restart.
   #usageSignature: string | null = null;
   #compactSignature: string | null = null;
+  #compactPending:{caption:CompactCaption|null}|null=null;
+  #compactQueued=false;
+  #screenPending:string|null=null;
+  #screenQueued=false;
   #enabled = true;
   #character: string | null = null;
   #adaptivePatchRam = false;
@@ -238,14 +242,51 @@ export class UsbTransport {
       .catch(error => console.error(`[usb] ${this.#message(error)}`));
   }
 
-  setCompact(caption:CompactCaption|null):void {
-    const packet=compactPacket(caption,this.#protocol);
-    if(this.#protocol<13 || packet===this.#compactSignature)return;
+  notify(packet:string,valid:()=>boolean=()=>true,minProtocol=17):void {
+    if(!this.connected || this.#protocol<minProtocol)return;
+    const link=this.#port;
     this.#commands=this.#commands.then(async()=>{
-      if(!this.connected || this.#protocol<13 || packet===this.#compactSignature)return;
+      // Drop stale sounds if a new USB connection replaced the original one.
+      if(!valid() || !this.connected || this.#port!==link || this.#protocol<minProtocol)return;
+      await this.#request(packet,line=>line.startsWith('NOTIFY accepted'));
+    }).catch(error=>console.error(`[usb] ${this.#message(error)}`));
+  }
+
+  setScreenProtection(packet:string):void {
+    if(!this.connected || this.#protocol<15)return;
+    this.#screenPending=packet;
+    if(this.#screenQueued)return;
+    this.#screenQueued=true;
+    this.#commands=this.#commands.then(async()=>{
+      const latest=this.#screenPending;this.#screenPending=null;
+      if(!latest || !this.connected || this.#protocol<15)return;
+      await this.#request(latest,line=>line==='SCREEN accepted');
+    }).catch(error=>console.error(`[usb] ${this.#message(error)}`)).finally(()=>{
+      this.#screenQueued=false;
+      const pending=this.#screenPending;this.#screenPending=null;
+      if(pending)this.setScreenProtection(pending);
+    });
+  }
+
+  setCompact(caption:CompactCaption|null):void {
+    if(!this.connected || this.#protocol<13)return;
+    // One latest pending snapshot. A slow link must not build a queue of stale
+    // foreground heartbeats or starve state/input commands behind them.
+    this.#compactPending={caption};
+    if(this.#compactQueued)return;
+    this.#compactQueued=true;
+    this.#commands=this.#commands.then(async()=>{
+      const latest=this.#compactPending;this.#compactPending=null;
+      if(!latest || !this.connected || this.#protocol<13)return;
+      const packet=compactPacket(latest.caption,this.#protocol); // freshness checked at send time
+      if(packet===this.#compactSignature)return;
       await this.#request(packet,line=>line==='SWITCHER accepted');
       this.#compactSignature=packet;
-    }).catch(error=>console.error(`[usb] ${this.#message(error)}`));
+    }).catch(error=>{console.error(`[usb] ${this.#message(error)}`);}).finally(()=>{
+      this.#compactQueued=false;
+      const pending=this.#compactPending;this.#compactPending=null;
+      if(pending)this.setCompact(pending.caption);
+    });
   }
 
   // Disabling releases the serial port so a cable can provide power only.
@@ -736,10 +777,10 @@ export function isLikelyEsp32Port(
 }
 
 export function parseFocusLine(line: string): FocusAction | null {
-  const selected=/^TOUCH select=([0-9]{1,2}) revision=([0-9]{1,10}) presses=([0-9]{1,10})(?: activate=([01]))?$/.exec(line);
+  const selected=/^TOUCH select=([0-9]{1,2}) revision=([0-9]{1,10}) presses=([0-9]{1,10})(?: activate=([01]))?(?: pin=([01]))?(?: boot=([0-9]{1,10}))?$/.exec(line);
   if(selected) {
     const index=Number(selected[1]),revision=Number(selected[2]),presses=Number(selected[3]);
-    return index>=1&&index<=99&&revision>=1&&revision<=0xffffffff&&presses>=1&&presses<=0xffffffff?{index,revision,...(selected[4]==='1'?{activate:true}:{})}:null;
+    return index>=1&&index<=99&&revision>=1&&revision<=0xffffffff&&presses>=1&&presses<=0xffffffff&&(selected[6]===undefined||Number(selected[6])<=0xffffffff)&&!(selected[4]==='1'&&selected[5]==='1')?{index,revision,...(selected[4]==='1'?{activate:true}:{}),...(selected[5]==='1'?{pin:true}:{}),...(selected[6]===undefined?{}:{boot:Number(selected[6]),sequence:presses})}:null;
   }
   const match = /^TOUCH focus=(next|pin) presses=([0-9]{1,10})$/.exec(line);
   if (!match || Number(match[2]) < 1 || Number(match[2]) > 0xFFFFFFFF) return null;

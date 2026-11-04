@@ -70,6 +70,15 @@ test('web alignment controls initialize once and send confirmed settings', async
     + 'port: "http://192.0.2.7:80", network: {ssid: "Home <Wi-Fi>", connected: true}, '
     + 'orientation: {offsetDegrees: 0}, firmware: {}}; renderStatus()', context);
   assert.equal(element('orientation-offset').disabled, false);
+  runInContext('status.desktop = {visible: false, sounds: true, volume: 10, backgroundAudio: true}; renderStatus()', context);
+  assert.equal(element('desktop-sounds-toggle').disabled, false);
+  assert.equal(element('desktop-volume').disabled, false);
+  runInContext('status.desktop.sounds = false; renderStatus()', context);
+  assert.equal(element('desktop-volume').disabled, true);
+  runInContext('status.desktop.backgroundAudio = false; renderStatus()', context);
+  assert.equal(element('desktop-sounds-toggle').disabled, true);
+  runInContext('delete status.desktop; renderStatus()', context);
+
   assert.equal(element('fact-connection').textContent, 'Wi-Fi connected');
   assert.equal(element('fact-connection').className, 'connected');
   assert.equal(element('fact-address').textContent, '192.0.2.7');
@@ -138,6 +147,19 @@ test('web alignment controls initialize once and send confirmed settings', async
   assert.equal(element('firmware-update').disabled, false);
   assert.equal(element('firmware-update').textContent, 'Update to v0.9.0');
   assert.equal(element('firmware-update').dataset.usb, 'true');
+  runInContext('status.firmware.protection = {enabled: true, knownCustom: true, confirmation: "fresh"}; renderFirmware()', context);
+  assert.equal(element('firmware-state').textContent, 'Custom firmware installed');
+  assert.equal(element('device-update-badge').hidden, true);
+  assert.equal(element('firmware-update').hidden, true);
+  assert.equal(element('usb-firmware-install').disabled, true);
+  assert.match(element('usb-firmware-install').textContent, /Replace custom firmware/);
+  element('custom-firmware-allow').checked = true;
+  runInContext('renderUsbFirmware()', context);
+  assert.equal(element('usb-firmware-install').disabled, false);
+  runInContext('status.firmware.protection.confirmation = "changed"; renderFirmware()', context);
+  assert.equal(element('custom-firmware-allow').checked, false);
+  assert.equal(element('usb-firmware-install').disabled, true);
+  runInContext('delete status.firmware.protection; renderFirmware()', context);
   // Each board has its own release firmware; a device that answers over USB decides the board.
   runInContext('status.port = "/dev/test"; $("usb-firmware-port").value = "/dev/test"; '
     + 'status.firmware.board = "waveshare-lcd-154"; status.firmware.usb.boards = ['

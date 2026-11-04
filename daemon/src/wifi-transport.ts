@@ -60,6 +60,10 @@ export class WifiTransport {
   #activeSignature = '';
   #usageSignature: string | null = null;
   #compactSignature: string | null = null;
+  #compactPending:{caption:CompactCaption|null}|null=null;
+  #compactQueued=false;
+  #screenPending:string|null=null;
+  #screenQueued=false;
   #scanTimer: NodeJS.Timeout | undefined;
   #scanActive = false;
   #commands = Promise.resolve();
@@ -424,16 +428,53 @@ export class WifiTransport {
       });
   }
 
-  setCompact(caption:CompactCaption|null):void {
-    const packet=compactPacket(caption,this.#protocol);
-    if(this.#installing || !this.#enabled || !this.#config || !this.#endpoint || this.#protocol<13 || packet===this.#compactSignature)return;
+  notify(packet:string,valid:()=>boolean=()=>true,minProtocol=17):void {
+    if(this.#installing || !this.#enabled || !this.#connected || this.#protocol<minProtocol)return;
+    const boot=this.#boot,endpoint=this.#endpoint;
     this.#commands=this.#commands.then(async()=>{
-      if(!this.#enabled || !this.#config || !this.#endpoint || this.#protocol<13 || packet===this.#compactSignature)return;
-      await this.#postBadge('/switcher',packet);this.#compactSignature=packet;
-    }).catch(error=>{console.error(`[wifi] ${this.#message(error)}`);this.#setConnection(false,null);});
+      if(!valid() || this.#installing || !this.#enabled || !this.#connected || this.#protocol<minProtocol || this.#boot!==boot || this.#endpoint!==endpoint)return;
+      await this.#postBadge('/notify',packet);
+    }).catch(error=>console.error(`[wifi] ${this.#message(error)}`));
   }
 
-  async #postBadge(path: '/icon' | '/agents' | '/usage' | '/orientation' | '/switcher', body: string): Promise<Response> {
+  setScreenProtection(packet:string):void {
+    if(this.#installing || !this.#enabled || !this.#connected || this.#protocol<15)return;
+    this.#screenPending=packet;
+    if(this.#screenQueued)return;
+    this.#screenQueued=true;
+    this.#commands=this.#commands.then(async()=>{
+      const latest=this.#screenPending;this.#screenPending=null;
+      if(!latest || this.#installing || !this.#enabled || !this.#connected || this.#protocol<15)return;
+      await this.#postBadge('/screen',latest);
+    }).catch(error=>console.error(`[wifi] ${this.#message(error)}`)).finally(()=>{
+      this.#screenQueued=false;
+      const pending=this.#screenPending;this.#screenPending=null;
+      if(pending)this.setScreenProtection(pending);
+    });
+  }
+
+  setCompact(caption:CompactCaption|null):void {
+    if(this.#installing || !this.#enabled || !this.#connected || !this.#config || !this.#endpoint || this.#protocol<13)return;
+    // One latest pending snapshot. A slow link must not build a queue of stale
+    // foreground heartbeats or starve state/input commands behind them.
+    this.#compactPending={caption};
+    if(this.#compactQueued)return;
+    this.#compactQueued=true;
+    this.#commands=this.#commands.then(async()=>{
+      const latest=this.#compactPending;this.#compactPending=null;
+      if(!latest || this.#installing || !this.#enabled || !this.#connected || !this.#config || !this.#endpoint || this.#protocol<13)return;
+      const packet=compactPacket(latest.caption,this.#protocol); // freshness checked at send time
+      if(packet===this.#compactSignature)return;
+      await this.#postBadge('/switcher',packet);
+      this.#compactSignature=packet;
+    }).catch(error=>{console.error(`[wifi] ${this.#message(error)}`);this.#setConnection(false,null);}).finally(()=>{
+      this.#compactQueued=false;
+      const pending=this.#compactPending;this.#compactPending=null;
+      if(pending)this.setCompact(pending.caption);
+    });
+  }
+
+  async #postBadge(path: '/icon' | '/agents' | '/usage' | '/orientation' | '/switcher' | '/screen' | '/notify', body: string): Promise<Response> {
     if (!this.#config || !this.#endpoint) throw new Error('The Wi-Fi device is not connected.');
     const response = await fetch(`${this.#endpoint}${path}`, {
       method: 'POST',

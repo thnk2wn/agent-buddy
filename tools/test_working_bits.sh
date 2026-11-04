@@ -9,6 +9,11 @@ mkdir -p build
   firmware/AgentCompanion/src/CharacterEffects.cpp \
   -o build/test-working-bits
 build/test-working-bits
+"${CXX:-clang++}" -std=c++17 -O1 -g -Wall -Wextra -Werror \
+  -fsanitize=address,undefined -fno-omit-frame-pointer \
+  tests/test_compact_effects.cpp firmware/AgentCompanion/src/AgentBadges.cpp \
+  firmware/AgentCompanion/src/CharacterEffects.cpp -o build/test-compact-effects
+build/test-compact-effects
 python3 <<'PY'
 from pathlib import Path
 from array import array

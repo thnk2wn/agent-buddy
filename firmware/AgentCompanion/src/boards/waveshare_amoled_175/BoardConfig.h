@@ -51,7 +51,8 @@ constexpr int kAudioAmplifierPin = 46;
 constexpr unsigned kAudioAmplifierStartupMs = 150;
 constexpr uint8_t kAudioCodecI2cAddress = 0x18;
 // The ES8311 volume for 1% and for 100% sound volume, tuned for the board's speaker.
-constexpr int kAudioMinimumCodecVolume = 68;
+// Extend the quiet end for desk use; keep the existing maximum output.
+constexpr int kAudioMinimumCodecVolume = 50;
 constexpr int kAudioMaximumCodecVolume = 82;
 
 // Touch, IMU, and audio codec share one I2C bus (Arduino Wire, I2C port 0).

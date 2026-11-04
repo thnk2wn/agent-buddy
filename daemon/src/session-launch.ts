@@ -1,3 +1,5 @@
+import type {ForegroundObservation,DesktopContext} from './foreground-session.js';
+import type {SessionVisuals} from './session-visuals.js';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {lstat, mkdir, readFile, readdir, rename, writeFile} from 'node:fs/promises';
@@ -9,7 +11,7 @@ import {terminalId} from './terminal-adapters.js';
 const exec = promisify(execFile);
 export interface LiveLaunchSession {id: string; pid: number; identity: string; cwd: string}
 interface Pairing {sessionId: string; pid: number; identity: string; adapter: string; terminalId: string; source?: 'manual' | 'title-probe'}
-export type LaunchCommand = {action: 'status' | 'list' | 'enable' | 'disable' | 'pair' | 'unpair' | 'open' | 'auto-enable' | 'auto-disable' | 'discover';
+export type LaunchCommand = {action: 'status' | 'list' | 'enable' | 'disable' | 'pair' | 'unpair' | 'open' | 'auto-enable' | 'auto-disable' | 'discover' | 'labels-enable' | 'labels-disable' | 'overlay-enable' | 'overlay-disable';
   sessionId?: string; terminalId?: string; adapter?: string};
 const sessionId = (id: unknown): id is string => typeof id === 'string' && /^claude:[a-zA-Z0-9_-]{1,128}$/.test(id);
 
@@ -38,6 +40,38 @@ export async function liveClaudeSessions(home: string, env: NodeJS.ProcessEnv): 
 }
 
 export class SessionLauncher {
+  visuals?:SessionVisuals;
+  onActivated?:(id:string)=>Promise<void>;
+  async desktopContext(observation:ForegroundObservation,ids:readonly string[],at:number):Promise<DesktopContext> {
+    const unknown={at,current:null,other:[]} as DesktopContext;
+    if(!this.#enabled||!observation.app)return unknown;
+    const revision=this.#revision,live=await this.sessions();
+    if(!this.#enabled||revision!==this.#revision)return unknown;
+    const paired=ids.flatMap(id=>{
+      const p=this.#pairs.get(id);
+      return p?.adapter==='ghostty'&&live.some(s=>s.id===id&&s.pid===p.pid&&s.identity===p.identity)?[p]:[];
+    });
+    const matches=paired.filter(p=>p.terminalId===observation.terminalId);
+    const current=observation.app==='com.mitchellh.ghostty'&&matches.length===1?matches[0]!.sessionId:null;
+    const other=ids.filter(id=>{
+      if(this.#desktopSessions.has(id))return observation.app!=='com.openai.codex';
+      const p=paired.find(p=>p.sessionId===id);
+      return !!p&&(observation.app!=='com.mitchellh.ghostty'||!!observation.terminalId&&p.terminalId!==observation.terminalId);
+    });
+    return {at,current,other};
+  }
+  async numberedTargets(ids:readonly string[]) {
+    if(!this.#enabled)return [];
+    const revision=this.#revision,live=await this.sessions();
+    if(!this.#enabled||revision!==this.#revision)return [];
+    return ids.flatMap((id,i)=>{
+      const p=this.#pairs.get(id);
+      return p?.adapter==='ghostty'&&live.some(s=>s.id===id&&s.pid===p.pid&&s.identity===p.identity)
+        ?[{terminalId:p.terminalId,index:i+1}]:[];
+    });
+  }
+  async #announce(id:string){try{await this.onActivated?.(id);}catch{/* Feedback cannot fail a successful activation. */}}
+
   #enabled = false;
   #desktopSessions = new Set<string>();
   setDesktopSessions(ids:readonly string[]):void {
@@ -77,7 +111,7 @@ export class SessionLauncher {
       this.#automatic = this.supported && value.automatic === true;
     } catch { /* Off by default, including corrupt/missing configuration. */ }
   }
-  status() {return {enabled:this.#enabled,automatic:this.#automatic,registration:this.#registration,supported:this.supported,pairings:[...this.#pairs.values()],last:this.#last};}
+  status() {return {enabled:this.#enabled,automatic:this.#automatic,registration:this.#registration,supported:this.supported,pairings:[...this.#pairs.values()],last:this.#last,visuals:this.visuals?.status()};}
   async #persist(): Promise<void> {
     const json = JSON.stringify({enabled:this.#enabled,automatic:this.#automatic,pairings:[...this.#pairs.values()]},null,2)+'\n';
     this.#save = this.#save.catch(()=>{}).then(async()=>{
@@ -89,9 +123,14 @@ export class SessionLauncher {
   }
   async command(request: LaunchCommand) {
     if (request.action === 'status') return this.status();
-    if (request.action === 'disable') {this.#enabled=false;this.#pendingActivation=null;this.#revision++;await this.#persist();return this.status();}
+    if (request.action === 'disable') {this.#enabled=false;this.#pendingActivation=null;this.#revision++;await this.#persist();await this.visuals?.restore();return this.status();}
     if (!this.supported) throw Error('Session launching is experimental and currently supports macOS only');
-    if (request.action === 'auto-enable' || request.action === 'auto-disable') {
+    if (['labels-enable','labels-disable','overlay-enable','overlay-disable'].includes(request.action)) {
+      if(!this.visuals)throw Error('Session visual feedback is unavailable');
+      await this.visuals.configure(request.action.startsWith('labels')?'labels':'overlay',request.action.endsWith('-enable'));
+      return this.status();
+    }
+    if (request.action === 'auto-enable'  || request.action === 'auto-disable') {
       this.#automatic=request.action==='auto-enable';this.#revision++;await this.#persist();return this.status();
     }
     if (request.action === 'enable') {this.#enabled=true;await this.#persist();return this.status();}
@@ -161,7 +200,7 @@ export class SessionLauncher {
     if (this.#busy) throw Error('A terminal focus request is already in progress');
     if(this.#desktopSessions.has(id)) {
       this.#busy=true;
-      try {await this.openDesktop(id);this.#last={ok:true,message:'Opened selected Codex chat',at:Date.now()};}
+      try {await this.openDesktop(id);await this.#announce(id);this.#last={ok:true,message:'Opened selected Codex chat',at:Date.now()};}
       catch(error){this.#last={ok:false,message:error instanceof Error?error.message:String(error),at:Date.now()};throw error;}
       finally{this.#busy=false;this.#drainActivation();}
       return;
@@ -176,6 +215,7 @@ export class SessionLauncher {
       if (!adapter) throw Error('Terminal adapter unavailable');
       if (!this.#enabled || revision!==this.#revision) throw Error('Session launching configuration changed');
       await adapter.focus(pair.terminalId);
+      await this.#announce(id);
       this.#last={ok:true,message:'Focused paired '+pair.adapter+' terminal',at:Date.now()};
     } catch(error) {
       this.#last={ok:false,message:error instanceof Error?error.message:String(error),at:Date.now()};throw error;

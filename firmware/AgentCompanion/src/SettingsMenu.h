@@ -154,11 +154,11 @@ class SettingsMenu {
       return SettingsAction::BrightnessUp;
     }
     if (volumeDown.contains(x, y)) {
-      soundVolume_ = soundVolume_ > 25 ? soundVolume_ - 25 : 0;
+      soundVolume_ = soundVolume_ > 5 ? soundVolume_ - 5 : 0;
       return SettingsAction::SoundDown;
     }
     if (volumeUp.contains(x, y)) {
-      soundVolume_ = soundVolume_ < 75 ? soundVolume_ + 25 : 100;
+      soundVolume_ = soundVolume_ < 95 ? soundVolume_ + 5 : 100;
       return SettingsAction::SoundUp;
     }
     return SettingsAction::None;
